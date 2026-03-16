@@ -1,25 +1,23 @@
 from enum import Enum, auto
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 
 class TokenType(Enum):
-    """Типы лексем для объявления вещественной константы в Pascal"""
-    KEYWORD_CONST = auto()      # const
-    KEYWORD_REAL = auto()       # real
-    IDENTIFIER = auto()         # идентификатор (pi)
-    OPERATOR_ASSIGN = auto()    # :=
-    OPERATOR_EQUAL = auto()     # =
-    SEPARATOR_COLON = auto()    # :
-    SEPARATOR_SEMICOLON = auto() # ;
-    NUMBER = auto()             # вещественное число (3.14)
-    WHITESPACE = auto()         # пробелы, табуляции
-    NEWLINE = auto()            # перевод строки
-    ERROR = auto()              # ошибочный символ
-    UNKNOWN = auto()            # неизвестный тип
+    KEYWORD_CONST = auto()
+    KEYWORD_REAL = auto()
+    IDENTIFIER = auto()
+    OPERATOR_ASSIGN = auto()
+    OPERATOR_EQUAL = auto()
+    SEPARATOR_COLON = auto()
+    SEPARATOR_SEMICOLON = auto()
+    NUMBER = auto()
+    WHITESPACE = auto()
+    NEWLINE = auto()
+    ERROR = auto()
+    UNKNOWN = auto()
 
 
 class Token:
-    """Класс, представляющий лексему"""
     
     def __init__(self, token_type: TokenType, value: str, line: int, start_pos: int, end_pos: int):
         self.type = token_type
@@ -29,7 +27,6 @@ class Token:
         self.end_pos = end_pos
         
     def get_type_code(self) -> int:
-        """Получить числовой код типа лексемы"""
         codes = {
             TokenType.KEYWORD_CONST: 1,
             TokenType.KEYWORD_REAL: 2,
@@ -47,7 +44,6 @@ class Token:
         return codes.get(self.type, 0)
     
     def get_type_name(self) -> str:
-        """Получить текстовое описание типа лексемы"""
         names = {
             TokenType.KEYWORD_CONST: "Ключевое слово 'const'",
             TokenType.KEYWORD_REAL: "Ключевое слово 'real'",
@@ -69,31 +65,20 @@ class Token:
 
 
 class Scanner:
-    """Лексический анализатор для объявления вещественной константы в Pascal"""
     
     def __init__(self):
-        self.tokens: List[Token] = []
-        self.errors: List[Token] = []
+        self.tokens = []
+        self.errors = []
         self.current_line = 1
         self.current_pos = 1
         
     def reset(self):
-        """Сброс состояния анализатора"""
         self.tokens = []
         self.errors = []
         self.current_line = 1
         self.current_pos = 1
         
     def analyze(self, text: str) -> Tuple[List[Token], List[Token]]:
-        """
-        Анализ входного текста
-        
-        Args:
-            text: входная строка для анализа
-            
-        Returns:
-            Кортеж (токены, ошибки)
-        """
         self.reset()
         
         i = 0
@@ -102,7 +87,6 @@ class Scanner:
         while i < length:
             ch = text[i]
             
-            # Обработка перевода строки
             if ch == '\n':
                 self.tokens.append(Token(
                     TokenType.NEWLINE, ch, 
@@ -113,7 +97,6 @@ class Scanner:
                 i += 1
                 continue
             
-            # Обработка пробелов и табуляции
             if ch.isspace():
                 start_pos = self.current_pos
                 start_i = i
@@ -127,7 +110,6 @@ class Scanner:
                 ))
                 continue
             
-            # Проверка ключевых слов и идентификаторов
             if ch.isalpha() or ch == '_':
                 start_pos = self.current_pos
                 start_i = i
@@ -136,7 +118,6 @@ class Scanner:
                     self.current_pos += 1
                 value = text[start_i:i]
                 
-                # Проверка на ключевые слова
                 if value == 'const':
                     token_type = TokenType.KEYWORD_CONST
                 elif value == 'real':
@@ -150,12 +131,10 @@ class Scanner:
                 ))
                 continue
             
-            # Проверка чисел (включая вещественные)
             if ch.isdigit() or ch == '.':
                 start_pos = self.current_pos
                 start_i = i
                 has_dot = False
-                valid = True
                 
                 while i < length:
                     ch = text[i]
@@ -171,14 +150,12 @@ class Scanner:
                 
                 value = text[start_i:i]
                 
-                # Проверка на корректность числа
                 if has_dot and value != '.' and value[-1] != '.':
                     self.tokens.append(Token(
                         TokenType.NUMBER, value,
                         self.current_line, start_pos, self.current_pos - 1
                     ))
                 else:
-                    # Ошибочное число
                     error_token = Token(
                         TokenType.ERROR, value,
                         self.current_line, start_pos, self.current_pos - 1
@@ -187,13 +164,11 @@ class Scanner:
                     self.errors.append(error_token)
                 continue
             
-            # Проверка операторов и разделителей
             if ch == ':':
                 start_pos = self.current_pos
                 i += 1
                 self.current_pos += 1
                 
-                # Проверка на оператор :=
                 if i < length and text[i] == '=':
                     i += 1
                     self.current_pos += 1
@@ -226,7 +201,6 @@ class Scanner:
                 self.current_pos += 1
                 continue
             
-            # Обработка недопустимых символов
             start_pos = self.current_pos
             start_i = i
             i += 1
@@ -241,52 +215,3 @@ class Scanner:
             self.errors.append(error_token)
         
         return self.tokens, self.errors
-    
-    def validate_syntax(self, tokens: List[Token]) -> List[str]:
-        """
-        Проверка синтаксической корректности объявления константы
-        
-        Ожидаемая последовательность:
-        const <идентификатор> : real = <число> ;
-        """
-        syntax_errors = []
-        
-        # Фильтруем пробелы и переводы строк для проверки структуры
-        important_tokens = [t for t in tokens if t.type not in [TokenType.WHITESPACE, TokenType.NEWLINE]]
-        
-        expected_sequence = [
-            TokenType.KEYWORD_CONST,
-            TokenType.IDENTIFIER,
-            TokenType.SEPARATOR_COLON,
-            TokenType.KEYWORD_REAL,
-            TokenType.OPERATOR_EQUAL,
-            TokenType.NUMBER,
-            TokenType.SEPARATOR_SEMICOLON
-        ]
-        
-        if len(important_tokens) < len(expected_sequence):
-            syntax_errors.append(f"Строка {self.current_line}: Неполное объявление константы")
-            return syntax_errors
-        
-        for i, expected_type in enumerate(expected_sequence):
-            if i >= len(important_tokens):
-                syntax_errors.append(f"Строка {self.current_line}: Ожидался {expected_type.name}")
-                break
-                
-            if important_tokens[i].type != expected_type:
-                syntax_errors.append(
-                    f"Строка {important_tokens[i].line}, позиция {important_tokens[i].start_pos}: "
-                    f"Ожидался {expected_type.name}, найден {important_tokens[i].type.name}"
-                )
-        
-        # Проверка наличия лишних токенов после точки с запятой
-        if len(important_tokens) > len(expected_sequence):
-            extra_tokens = important_tokens[len(expected_sequence):]
-            for token in extra_tokens:
-                if token.type not in [TokenType.WHITESPACE, TokenType.NEWLINE]:
-                    syntax_errors.append(
-                        f"Строка {token.line}, позиция {token.start_pos}: "
-                        f"Лишний токен '{token.value}' после объявления"
-                    )
-        
-        return syntax_errors

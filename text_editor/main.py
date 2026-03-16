@@ -137,32 +137,6 @@ class TokenTable(QTableWidget):
             for col in range(4):
                 self.item(row, col).setBackground(QBrush(QColor(255, 200, 200)))
                 self.item(row, col).setForeground(QBrush(QColor(0, 0, 0)))
-    
-    def add_syntax_error(self, error_msg):
-        row = self.rowCount()
-        self.insertRow(row)
-        
-        error_item = QTableWidgetItem("!")
-        error_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-        error_item.setBackground(QBrush(QColor(255, 200, 200)))
-        error_item.setForeground(QBrush(QColor(255, 0, 0)))
-        self.setItem(row, 0, error_item)
-        
-        error_text = QTableWidgetItem("Синтаксическая ошибка")
-        error_text.setBackground(QBrush(QColor(255, 200, 200)))
-        error_text.setForeground(QBrush(QColor(0, 0, 0)))
-        self.setItem(row, 1, error_text)
-        
-        error_desc = QTableWidgetItem(error_msg)
-        error_desc.setBackground(QBrush(QColor(255, 200, 200)))
-        error_desc.setForeground(QBrush(QColor(0, 0, 0)))
-        self.setItem(row, 2, error_desc)
-        
-        for col in range(3, 4):
-            item = QTableWidgetItem("")
-            item.setBackground(QBrush(QColor(255, 200, 200)))
-            item.setForeground(QBrush(QColor(0, 0, 0)))
-            self.setItem(row, col, item)
 
 
 class HelpDialog(QDialog):
@@ -939,14 +913,7 @@ class TextEditor(QMainWindow):
                 self.go_to_position(errors[0].line, errors[0].start_pos)
                 self.output_tabs.setCurrentIndex(1)
         
-        syntax_errors = self.scanner.validate_syntax(tokens)
-        if syntax_errors:
-            self.output_area.append("\n=== СИНТАКСИЧЕСКИЕ ОШИБКИ ===")
-            for error in syntax_errors:
-                self.output_area.append(f"! {error}")
-                self.token_table.add_syntax_error(error)
-        
-        self.status_label.setText(f"Анализ завершен. Найдено ошибок: {len(errors) + len(syntax_errors)}")
+        self.status_label.setText(f"Анализ завершен. Найдено ошибок: {len(errors)}")
     
     def show_message(self):
         sender = self.sender()
@@ -962,11 +929,10 @@ class TextEditor(QMainWindow):
         about_text = """
         <h2>Compiler</h2>
         <p><b>Версия:</b> 3.0</p>
-        <p><b>Автор:</b> Студент</p>
-        <p><b>Описание:</b> Текстовый редактор с лексическим анализатором
-        для языка Pascal (объявление вещественных констант).</p>
+        <p><b>Автор:</b> Марков Д.Д.</p>
+        <p><b>Описание:</b> Текстовый редактор с лексическим анализатором</p>
         <p><b>Технологии:</b> Python 3.x, PyQt6</p>
-        <p><b>Год:</b> 2024</p>
+        <p><b>Год:</b> 2026</p>
         """
         
         QMessageBox.about(self, "О программе", about_text)
