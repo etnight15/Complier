@@ -120,7 +120,7 @@ const myConst: real = 10.0;
 - const myConst: real = 10.0;
 
 ## Разработка грамматики
-<img width="752" height="308" alt="image" src="https://github.com/user-attachments/assets/8fc61014-bd24-48b5-b6df-96f6084f2b63" />
+<img width="783" height="387" alt="image" src="https://github.com/user-attachments/assets/c43009f9-0ccb-41bb-ad09-30b0513aae73" />
 
 ## Классификация грамматики
 Грамматика является автоматной:
