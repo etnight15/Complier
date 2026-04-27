@@ -284,7 +284,6 @@ class TextEditor(QMainWindow):
         
         self.create_menu_bar()
         self.create_toolbar()
-        self.create_search_panel()
         self.create_editor_tabs()
         self.create_output_tabs()
         
@@ -293,7 +292,6 @@ class TextEditor(QMainWindow):
         main_splitter.addWidget(self.output_tabs)
         main_splitter.setSizes([500, 400])
         
-        layout.addWidget(self.search_panel)
         layout.addWidget(main_splitter)
         
         self.status_bar = QStatusBar()
@@ -380,9 +378,7 @@ class TextEditor(QMainWindow):
         self.syntax_error_table.errorClicked.connect(self.highlight_error)
         self.output_tabs.addTab(self.syntax_error_table, "Синтаксические ошибки")
         
-        self.search_result_table = SearchResultTable()
-        self.search_result_table.resultClicked.connect(self.highlight_search_result)
-        self.output_tabs.addTab(self.search_result_table, "Результаты поиска")
+        # В интерфейсе оставляем только инструменты лексического и синтаксического анализа.
         
     def create_new_editor_tab(self, file_path=None):
         tab = EditorTab()
@@ -1107,23 +1103,15 @@ class TextEditor(QMainWindow):
         - Удалить (Del) - удалить выделенный текст
         - Выделить все (Ctrl+A) - выделить весь текст
         
-        Поиск подстрок:
-        
-        1. Обычный поиск - поиск точного совпадения строки
-        2. Регулярное выражение - поиск по шаблону регулярного выражения
-        3. Целое слово - поиск точного совпадения целого слова
-        
-        Примеры регулярных выражений:
-        - \\d+ - поиск чисел
-        - [a-zA-Z]+ - поиск слов
-        - ^const - поиск строк, начинающихся с const
-        - ;$ - поиск строк, заканчивающихся на ;
+        Назначение программы:
+        - Лексический анализ входного текста
+        - Синтаксический анализ входного текста
         """
         
         QMessageBox.information(self, "Справка", help_text)
         
     def show_about(self):
-        about_text = "Compiler v4.0\nАвтор: Марков Д.Д.\n2026\n\nДобавлен модуль поиска подстрок с использованием регулярных выражений"
+        about_text = "Compiler v4.0\nАвтор: Марков Д.Д.\n2026\n\nЛексический и синтаксический анализатор"
         QMessageBox.about(self, "О программе", about_text)
 
 
