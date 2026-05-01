@@ -36,7 +36,6 @@ class Parser:
         if token:
             self.errors.append(SyntaxError(token.value, token.line, token.start_pos, message))
         else:
-            # Если токенов нет/конец ввода — позицию берём максимально правдоподобную.
             if self.tokens:
                 last = self.tokens[-1]
                 self.errors.append(SyntaxError("<конец>", last.line, last.end_pos + 1, message))
@@ -61,7 +60,6 @@ class Parser:
         return count, first
 
     def _skip_until(self, stop_types):
-        """Пропустить неожиданные токены до одного из stop_types или конца."""
         while self.current() and self.current().type not in stop_types:
             self.next()
     
@@ -75,27 +73,21 @@ class Parser:
         
         has_error = False
         
-        # const
         if not self.match(TokenType.KEYWORD_CONST, 'const'):
             self.add_error(self.current(), "Отсутствует 'const'")
             has_error = True
-            # Если строка фактически пустая/закрывается сразу ';' — показываем только ошибку про const
             if not self.current() or (self.current() and self.current().type == TokenType.SEPARATOR_SEMICOLON):
                 return False, self.errors
-            # Восстановление: если где-то дальше есть const — дойдём до него
             self._skip_until({TokenType.KEYWORD_CONST, TokenType.IDENTIFIER, TokenType.SEPARATOR_COLON, TokenType.OPERATOR_ASSIGN, TokenType.OPERATOR_EQUAL, TokenType.SEPARATOR_SEMICOLON, TokenType.NUMBER, TokenType.SIGN})
             self.match(TokenType.KEYWORD_CONST, 'const')
 
-        # identifier
         if not self.match(TokenType.IDENTIFIER):
             self.add_error(self.current(), "Отсутствует идентификатор")
             has_error = True
             self._skip_until({TokenType.IDENTIFIER, TokenType.SEPARATOR_COLON, TokenType.OPERATOR_ASSIGN, TokenType.OPERATOR_EQUAL, TokenType.SEPARATOR_SEMICOLON})
             self.match(TokenType.IDENTIFIER)
 
-        # :
         if self.current() and self.current().type == TokenType.OPERATOR_ASSIGN:
-            # встречено ':=' вместо ':'
             self.add_error(self.current(), "Ожидалось ':' (найдено ':=')")
             has_error = True
             self.next()
@@ -110,14 +102,12 @@ class Parser:
             self.add_error(colon_start, f"Повторяющийся ':' ({colon_count} раза)")
             has_error = True
 
-        # real
         if not self.match(TokenType.KEYWORD_REAL, 'real'):
             self.add_error(self.current(), "Отсутствует 'real'")
             has_error = True
             self._skip_until({TokenType.KEYWORD_REAL, TokenType.OPERATOR_EQUAL, TokenType.SEPARATOR_SEMICOLON})
             self.match(TokenType.KEYWORD_REAL, 'real')
 
-        # =
         equal_count, equal_start = self._consume_repeats(TokenType.OPERATOR_EQUAL)
         if equal_count == 0:
             self.add_error(self.current(), "Отсутствует '='")
@@ -128,13 +118,10 @@ class Parser:
             self.add_error(equal_start, f"Повторяющийся '=' ({equal_count} раза)")
             has_error = True
 
-        # [sign]
         self.match(TokenType.SIGN)
 
-        # number (вещественное)
         token = self.current()
         if token and token.type == TokenType.NUMBER:
-            # Проверки формата на синтаксическом этапе (лексер теперь выдаёт NUMBER всегда)
             if not re.fullmatch(r"\d+\.\d+", token.value):
                 self.add_error(token, "Ожидалось вещественное число")
                 has_error = True
@@ -146,7 +133,6 @@ class Parser:
             if self.current() and self.current().type == TokenType.NUMBER:
                 self.next()
 
-        # ;
         semicolon_count, semicolon_start = self._consume_repeats(TokenType.SEPARATOR_SEMICOLON)
         if semicolon_count == 0:
             self.add_error(self.current(), "Отсутствует ';'")
@@ -157,7 +143,6 @@ class Parser:
             self.add_error(semicolon_start, f"Повторяющийся ';' ({semicolon_count} раза)")
             has_error = True
 
-        # всё что осталось после ';' — лишнее
         if self.index < len(self.tokens):
             self.add_error(self.current(), "Лишние символы после объявления")
             has_error = True

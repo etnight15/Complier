@@ -298,9 +298,20 @@ class TextEditor(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_label = QLabel("Готов к работе")
         self.status_bar.addWidget(self.status_label)
+        self.set_status_message("Готов к работе")
         
         self.update_status_from_current_tab()
         self.apply_styles()
+
+    def set_status_message(self, message: str, state: str = "idle"):
+        colors = {
+            "idle": "#000000",
+            "success": "#1e7e34",
+            "error": "#c62828",
+        }
+        color = colors.get(state, colors["idle"])
+        self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self.status_label.setText(message)
         
     def create_search_panel(self):
         self.search_panel = QWidget()
@@ -352,7 +363,6 @@ class TextEditor(QMainWindow):
         if not pattern:
             return
         self.search_input.setText(pattern)
-        # Автоматически включаем режим RegExp
         self.search_type.setCurrentText("Регулярное выражение")
         
     def create_editor_tabs(self):
@@ -378,8 +388,7 @@ class TextEditor(QMainWindow):
         self.syntax_error_table.errorClicked.connect(self.highlight_error)
         self.output_tabs.addTab(self.syntax_error_table, "Синтаксические ошибки")
         
-        # В интерфейсе оставляем только инструменты лексического и синтаксического анализа.
-        
+
     def create_new_editor_tab(self, file_path=None):
         tab = EditorTab()
         tab.textChanged.connect(self.on_text_changed)
@@ -783,7 +792,7 @@ class TextEditor(QMainWindow):
     
     def new_file(self):
         self.create_new_editor_tab()
-        self.status_label.setText("Создан новый файл")
+        self.set_status_message("Создан новый файл")
         
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -792,7 +801,7 @@ class TextEditor(QMainWindow):
         )
         if file_path:
             self.create_new_editor_tab(file_path)
-            self.status_label.setText(f"Открыт файл: {file_path}")
+            self.set_status_message(f"Открыт файл: {file_path}")
                     
     def save_file(self):
         tab = self.get_current_editor_tab()
@@ -804,7 +813,7 @@ class TextEditor(QMainWindow):
                 with open(tab.current_file, 'w', encoding='utf-8') as file:
                     file.write(tab.get_text())
                 tab.text_changed = False
-                self.status_label.setText(f"Файл сохранен: {os.path.basename(tab.current_file)}")
+                self.set_status_message(f"Файл сохранен: {os.path.basename(tab.current_file)}")
                 return True
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл: {str(e)}")
@@ -862,7 +871,7 @@ class TextEditor(QMainWindow):
             line = tab.get_current_line()
             col = tab.get_current_column()
             chars = len(tab.get_text())
-            self.status_label.setText(f"Строка: {line}, Колонка: {col} | Символов: {chars}")
+            self.set_status_message(f"Строка: {line}, Колонка: {col} | Символов: {chars}")
         
     def undo(self):
         tab = self.get_current_editor_tab()
@@ -909,7 +918,7 @@ class TextEditor(QMainWindow):
     def highlight_error(self, line, start_pos, end_pos, row):
         tab = self.get_current_editor_tab()
         if tab:
-            tab.highlight_error(line, start_pos, end_pos)
+            tab.go_to_position(line, start_pos)
     
     def highlight_search_result(self, line, start_pos, end_pos):
         tab = self.get_current_editor_tab()
@@ -1033,7 +1042,7 @@ class TextEditor(QMainWindow):
                     first = lex_errors[0]
                     self.go_to_position(first.line, first.start_pos)
                     self.output_tabs.setCurrentIndex(2)
-                    self.status_label.setText(f"Анализ завершен. Лексических ошибок: {len(lex_errors)}")
+                    self.set_status_message(f"Анализ завершен. Лексических ошибок: {len(lex_errors)}", "error")
                     return
             
             self.output_area.append("\n=== СИНТАКСИЧЕСКИЙ АНАЛИЗ ===\n")
@@ -1068,7 +1077,8 @@ class TextEditor(QMainWindow):
                 self.output_area.append("Синтаксических ошибок не обнаружено. Строка корректна.")
             
             total_errors = len(syntax_errors)
-            self.status_label.setText(f"Анализ завершен. Всего ошибок: {total_errors}")
+            status_state = "success" if total_errors == 0 else "error"
+            self.set_status_message(f"Анализ завершен. Всего ошибок: {total_errors}", status_state)
             
             if total_errors == 0:
                 self.output_area.append("\n✅ Программа синтаксически верна!")
@@ -1077,7 +1087,7 @@ class TextEditor(QMainWindow):
             import traceback
             self.output_area.append(f"Ошибка при анализе: {str(e)}")
             self.output_area.append(traceback.format_exc())
-            self.status_label.setText("Ошибка при анализе")
+            self.set_status_message("Ошибка при анализе", "error")
     
     def show_message(self):
         sender = self.sender()
@@ -1111,7 +1121,17 @@ class TextEditor(QMainWindow):
         QMessageBox.information(self, "Справка", help_text)
         
     def show_about(self):
-        about_text = "Compiler v4.0\nАвтор: Марков Д.Д.\n2026\n\nЛексический и синтаксический анализатор"
+        about_text = (
+            "<div style='font-size: 11pt; line-height: 1.45;'>"
+            "<h3 style='margin-bottom: 8px;'>Compiler</h3>"
+            "<p><b>Студент:</b> Марков Данил Дмитриевич<br>"
+            "<b>Год:</b> 2026<br>"
+            "<b>Вариант курсовой работы:</b> Объявление вещественной константы с "
+            "инициализацией на языке Pascal</p>"
+            "<p>Приложение представляет собой текстовый редактор, который в дальнейшем "
+            "будет расширен до полноценного языкового процессора для анализа.</p>"
+            "</div>"
+        )
         QMessageBox.about(self, "О программе", about_text)
 
 

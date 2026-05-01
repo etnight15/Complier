@@ -165,9 +165,6 @@ class Scanner:
                         break
                 
                 value = text[start_i:i]
-
-                # Формат вещественного числа проверяется на синтаксическом этапе.
-                # На лексическом этапе любое число (с точкой или без) — это NUMBER.
                 self.tokens.append(Token(
                     TokenType.NUMBER, value,
                     self.current_line, start_pos, self.current_pos - 1
@@ -185,7 +182,6 @@ class Scanner:
                         i += 1
                         self.current_pos += 1
                     value = text[start_i:i]
-                    # Формат ".123" валиден как токен NUMBER, проверка формата — в парсере.
                     self.tokens.append(Token(
                         TokenType.NUMBER, value,
                         self.current_line, start_pos, self.current_pos - 1
