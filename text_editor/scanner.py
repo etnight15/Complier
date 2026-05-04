@@ -151,7 +151,7 @@ class Scanner:
                 start_pos = self.current_pos
                 start_i = i
                 has_dot = False
-                
+
                 while i < length:
                     ch = text[i]
                     if ch.isdigit():
@@ -163,11 +163,20 @@ class Scanner:
                         self.current_pos += 1
                     else:
                         break
-                
+
+                if i < length and text[i] in "eE":
+                    j = i + 1
+                    if j < length and text[j] in "+-":
+                        j += 1
+                    k = j
+                    while k < length and text[k].isdigit():
+                        k += 1
+                    if k > j:
+                        self.current_pos += k - i
+                        i = k
+
                 value = text[start_i:i]
 
-                # Формат вещественного числа проверяется на синтаксическом этапе.
-                # На лексическом этапе любое число (с точкой или без) — это NUMBER.
                 self.tokens.append(Token(
                     TokenType.NUMBER, value,
                     self.current_line, start_pos, self.current_pos - 1
@@ -184,8 +193,17 @@ class Scanner:
                     while i < length and text[i].isdigit():
                         i += 1
                         self.current_pos += 1
+                    if i < length and text[i] in "eE":
+                        j = i + 1
+                        if j < length and text[j] in "+-":
+                            j += 1
+                        k = j
+                        while k < length and text[k].isdigit():
+                            k += 1
+                        if k > j:
+                            self.current_pos += k - i
+                            i = k
                     value = text[start_i:i]
-                    # Формат ".123" валиден как токен NUMBER, проверка формата — в парсере.
                     self.tokens.append(Token(
                         TokenType.NUMBER, value,
                         self.current_line, start_pos, self.current_pos - 1

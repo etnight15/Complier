@@ -251,6 +251,59 @@ class SearchResultTable(QTableWidget):
         return row
 
 
+class SemanticTable(QTableWidget):
+    semanticClicked = pyqtSignal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_table()
+
+    def setup_table(self):
+        self.setColumnCount(3)
+        self.setHorizontalHeaderLabels(["Неверный фрагмент", "Местоположение", "Описание"])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setAlternatingRowColors(True)
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.itemClicked.connect(self.on_item_clicked)
+
+    def on_item_clicked(self, item):
+        row = item.row()
+        location_item = self.item(row, 1)
+        if location_item and location_item.toolTip():
+            try:
+                line, pos = map(int, location_item.toolTip().split(","))
+                self.semanticClicked.emit(line, pos)
+            except Exception:
+                pass
+
+    def clear_table(self):
+        self.setRowCount(0)
+
+    def add_result(self, fragment: str, line: int, pos: int, message: str, *, is_error: bool = False):
+        row = self.rowCount()
+        self.insertRow(row)
+
+        frag_item = QTableWidgetItem(fragment)
+        loc_text = f"Строка: {line}, поз. {pos}"
+        loc_item = QTableWidgetItem(loc_text)
+        loc_item.setToolTip(f"{line},{pos}")
+        msg_item = QTableWidgetItem(message)
+
+        if is_error:
+            pink_bg = QBrush(QColor(255, 200, 200))
+            red_fg = QBrush(QColor(180, 0, 0))
+            for item in (frag_item, loc_item, msg_item):
+                item.setBackground(pink_bg)
+                item.setForeground(red_fg)
+
+        self.setItem(row, 0, frag_item)
+        self.setItem(row, 1, loc_item)
+        self.setItem(row, 2, msg_item)
+
+        return row
+
+
 def create_icon(char):
     pixmap = QPixmap(24, 24)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -268,7 +321,7 @@ class TextEditor(QMainWindow):
         self.current_file = None
         self.text_changed = False
         self.scanner = Scanner()
-        from parser import Parser, SyntaxError
+        from parser import Parser
         self.parser = Parser()  
         self.init_ui()
         
@@ -354,7 +407,6 @@ class TextEditor(QMainWindow):
         if not pattern:
             return
         self.search_input.setText(pattern)
-        # Автоматически включаем режим RegExp
         self.search_type.setCurrentText("Регулярное выражение")
         
     def create_editor_tabs(self):
@@ -383,6 +435,27 @@ class TextEditor(QMainWindow):
         self.search_result_table = SearchResultTable()
         self.search_result_table.resultClicked.connect(self.highlight_search_result)
         self.output_tabs.addTab(self.search_result_table, "Результаты поиска")
+
+        self.semantic_table = SemanticTable()
+        self.semantic_table.semanticClicked.connect(self.go_to_position)
+
+        self.ast_output = QTextEdit()
+        self.ast_output.setReadOnly(True)
+        self.ast_output.setPlaceholderText("Дерево AST появится после успешного синтаксического анализа…")
+
+        self.semantics_ast_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.semantics_ast_splitter.addWidget(self.semantic_table)
+        self.semantics_ast_splitter.addWidget(self.ast_output)
+        self.semantics_ast_splitter.setSizes([220, 380])
+
+        self.semantics_ast_panel = QWidget()
+        semantics_ast_layout = QVBoxLayout(self.semantics_ast_panel)
+        semantics_ast_layout.setContentsMargins(0, 0, 0, 0)
+        semantics_ast_layout.setSpacing(0)
+        semantics_ast_layout.addWidget(self.semantics_ast_splitter)
+
+        self.output_tabs.addTab(self.semantics_ast_panel, "Семантика и AST")
+        self.tab_semantics_ast = self.output_tabs.count() - 1
         
     def create_new_editor_tab(self, file_path=None):
         tab = EditorTab()
@@ -1010,6 +1083,8 @@ class TextEditor(QMainWindow):
         self.token_table.clear_table()
         self.syntax_error_table.clear_table()
         self.output_area.clear()
+        self.ast_output.clear()
+        self.semantic_table.clear_table()
         
         try:
             tokens, lex_errors = self.scanner.analyze(text)
@@ -1017,11 +1092,10 @@ class TextEditor(QMainWindow):
             for token in tokens:
                 self.token_table.add_token(token)
             
-            self.output_area.append("=== РЕЗУЛЬТАТЫ ЛЕКСИЧЕСКОГО АНАЛИЗА ===\n")
-            self.output_area.append(f"Всего лексем: {len(tokens)}")
-            self.output_area.append(f"Лексических ошибок: {len(lex_errors)}\n")
+            self.output_area.append("=== РЕЗУЛЬТАТЫ ПАРСЕРА ===\n")
             
             if lex_errors:
+                self.output_area.append("Парсер не запущен: обнаружены лексические ошибки.\n")
                 self.output_area.append("=== ЛЕКСИЧЕСКИЕ ОШИБКИ ===")
                 for error in lex_errors:
                     self.output_area.append(
@@ -1041,8 +1115,7 @@ class TextEditor(QMainWindow):
                     return
             
             self.output_area.append("\n=== СИНТАКСИЧЕСКИЙ АНАЛИЗ ===\n")
-            
-            success, syntax_errors = self.parser.analyze(tokens)
+            ast_root, syntax_errors, semantic_errors = self.parser.analyze_full(tokens)
             
             if syntax_errors:
                 self.output_area.append(f"Найдено синтаксических ошибок: {len(syntax_errors)}\n")
@@ -1068,21 +1141,44 @@ class TextEditor(QMainWindow):
                     else:
                         self.go_to_position(first.line, first.pos)
                     self.output_tabs.setCurrentIndex(2)
+                self.status_label.setText(f"Анализ завершен. Всего ошибок: {len(syntax_errors)}")
+                return
             else:
                 self.output_area.append("Синтаксических ошибок не обнаружено. Строка корректна.")
-            
-            total_errors = len(syntax_errors)
+
+            self.ast_output.append("=== AST ===\n")
+            self.ast_output.append(self.parser.format_ast(ast_root))
+
+            if semantic_errors:
+                for error in semantic_errors:
+                    self.semantic_table.add_result(
+                        error.fragment, error.line, error.pos, error.message, is_error=True
+                    )
+                    end_pos = error.pos + len(error.fragment) - 1 if error.fragment != "<неизвестно>" else error.pos
+                    self.syntax_error_table.add_error(
+                        error.fragment, error.line, error.pos, end_pos, error.message
+                    )
+
+                first = semantic_errors[0]
+                self.go_to_position(first.line, first.pos)
+            else:
+                self.semantic_table.add_result("-", 1, 1, "Семантических ошибок не обнаружено.", is_error=False)
+
+            self.output_tabs.setCurrentIndex(self.tab_semantics_ast)
+
+            total_errors = len(syntax_errors) + len(semantic_errors)
+            self.output_area.append(f"\nКоличество ошибок: {total_errors}")
             self.status_label.setText(f"Анализ завершен. Всего ошибок: {total_errors}")
-            
+
             if total_errors == 0:
-                self.output_area.append("\n✅ Программа синтаксически верна!")
+                self.output_area.append("\n✅ Программа синтаксически и семантически верна!")
                 
         except Exception as e:
             import traceback
             self.output_area.append(f"Ошибка при анализе: {str(e)}")
             self.output_area.append(traceback.format_exc())
             self.status_label.setText("Ошибка при анализе")
-    
+
     def show_message(self):
         sender = self.sender()
         if sender:
