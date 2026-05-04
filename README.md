@@ -252,9 +252,12 @@ const myConst: real = 10.0;
 <img width="686" height="769" alt="image" src="https://github.com/user-attachments/assets/ab649972-374c-4439-b1d5-6d2c740acc1f" />
 
 ### Формат вывода AST в программе
-
+<img width="464" height="201" alt="image" src="https://github.com/user-attachments/assets/a81d3ec8-9bd7-40b0-9000-7ef0c38c0805" />
 
 ## Тестовые примеры (скриншоты)
+<img width="1338" height="1010" alt="image" src="https://github.com/user-attachments/assets/fd949207-103f-422d-aa25-e1e620b6b6f8" />
+
+
 
 
 
