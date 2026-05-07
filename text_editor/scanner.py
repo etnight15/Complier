@@ -235,8 +235,25 @@ class Scanner:
             
             start_pos = self.current_pos
             start_i = i
-            i += 1
-            self.current_pos += 1
+            bad_char = ch
+            while i < length:
+                current = text[i]
+                if current != bad_char:
+                    break
+                if (
+                    current == '\n'
+                    or current.isspace()
+                    or current.isalpha()
+                    or current == '_'
+                    or current.isdigit()
+                    or current in {"+", "-", ".", ":", "=", ";"}
+                ):
+                    break
+                i += 1
+                self.current_pos += 1
+            if i == start_i:
+                i += 1
+                self.current_pos += 1
             value = text[start_i:i]
             
             error_token = Token(

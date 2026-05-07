@@ -312,6 +312,11 @@ class TextEditor(QMainWindow):
         color = colors.get(state, colors["idle"])
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.status_label.setText(message)
+
+    def _format_lex_error_message(self, value: str) -> str:
+        if value and len(value) > 1 and all(ch == value[0] for ch in value):
+            return f"Недопустимый символ '{value[0]}' (повторение: {len(value)} раза)"
+        return f"Недопустимый символ '{value}'"
         
     def create_search_panel(self):
         self.search_panel = QWidget()
@@ -1018,36 +1023,35 @@ class TextEditor(QMainWindow):
         
         try:
             tokens, lex_errors = self.scanner.analyze(text)
+            success, syntax_errors = self.parser.analyze(tokens)
+
+            suppress_lex_if_const_invalid = any(
+                "Ожидалось ключевое слово const (недопустимый символ" in err.message
+                for err in syntax_errors
+            )
+            shown_lex_errors = [] if suppress_lex_if_const_invalid else lex_errors
             
             for token in tokens:
                 self.token_table.add_token(token)
             
             self.output_area.append("=== РЕЗУЛЬТАТЫ ЛЕКСИЧЕСКОГО АНАЛИЗА ===\n")
             self.output_area.append(f"Всего лексем: {len(tokens)}")
-            self.output_area.append(f"Лексических ошибок: {len(lex_errors)}\n")
+            self.output_area.append(f"Лексических ошибок: {len(shown_lex_errors)}\n")
             
-            if lex_errors:
+            if shown_lex_errors:
                 self.output_area.append("=== ЛЕКСИЧЕСКИЕ ОШИБКИ ===")
-                for error in lex_errors:
+                for error in shown_lex_errors:
+                    lex_message = self._format_lex_error_message(error.value)
                     self.output_area.append(
                         f"! Строка {error.line}, позиция {error.start_pos}: "
-                        f"недопустимый символ '{error.value}'"
+                        f"{lex_message}"
                     )
                     self.syntax_error_table.add_error(
                         error.value, error.line, error.start_pos, error.end_pos,
-                        f"недопустимый символ '{error.value}'"
+                        lex_message
                     )
-                
-                if lex_errors:
-                    first = lex_errors[0]
-                    self.go_to_position(first.line, first.start_pos)
-                    self.output_tabs.setCurrentIndex(2)
-                    self.set_status_message(f"Анализ завершен. Лексических ошибок: {len(lex_errors)}", "error")
-                    return
             
             self.output_area.append("\n=== СИНТАКСИЧЕСКИЙ АНАЛИЗ ===\n")
-            
-            success, syntax_errors = self.parser.analyze(tokens)
             
             if syntax_errors:
                 self.output_area.append(f"Найдено синтаксических ошибок: {len(syntax_errors)}\n")
@@ -1076,12 +1080,24 @@ class TextEditor(QMainWindow):
             else:
                 self.output_area.append("Синтаксических ошибок не обнаружено. Строка корректна.")
             
-            total_errors = len(syntax_errors)
+            total_errors = len(shown_lex_errors) + len(syntax_errors)
             status_state = "success" if total_errors == 0 else "error"
             self.set_status_message(f"Анализ завершен. Всего ошибок: {total_errors}", status_state)
             
             if total_errors == 0:
                 self.output_area.append("\n✅ Программа синтаксически верна!")
+            else:
+                if shown_lex_errors:
+                    first = shown_lex_errors[0]
+                    self.go_to_position(first.line, first.start_pos)
+                elif syntax_errors:
+                    first = syntax_errors[0]
+                    if first.fragment != "<конец>":
+                        end_pos = first.pos + len(first.fragment) - 1
+                        self.highlight_error(first.line, first.pos, end_pos, 0)
+                    else:
+                        self.go_to_position(first.line, first.pos)
+                self.output_tabs.setCurrentIndex(2)
                 
         except Exception as e:
             import traceback
