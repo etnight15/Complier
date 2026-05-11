@@ -15,6 +15,15 @@ from scanner import Scanner, Token, TokenType
 from parser import Parser, SyntaxError
 
 
+def _course_assets_base_dir() -> str:
+    """Папка с PNG для курсовых материалов: из исходников или из распаковки PyInstaller (_MEIPASS)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        bundled = os.path.join(sys._MEIPASS, "text_editor", "assets")
+        if os.path.isdir(bundled):
+            return bundled
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
 class EditorTab(QWidget):
     textChanged = pyqtSignal()
     
@@ -1012,6 +1021,31 @@ class TextEditor(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при поиске: {str(e)}")
     
+    def _filter_lex_errors_for_display(self, text: str, lex_errors, syntax_errors) -> list:
+        """Не дублировать в таблице: лексические ERROR внутри испорченного const и те же позиции, что синтаксика «ожидался идентификатор»."""
+        suppress_const_prefix = any(
+            err.message.startswith("Ожидалось ключевое слово const (")
+            for err in syntax_errors
+        )
+        ident_syn_positions = {
+            (err.line, err.pos)
+            for err in syntax_errors
+            if err.message.startswith("Ожидался идентификатор;")
+        }
+        colon_idx = text.find(":")
+        colon_pos_1based = colon_idx + 1 if colon_idx >= 0 else None
+        out = []
+        for le in lex_errors:
+            if le.type == TokenType.ERROR:
+                if suppress_const_prefix and (
+                    colon_pos_1based is None or le.start_pos < colon_pos_1based
+                ):
+                    continue
+                if (le.line, le.start_pos) in ident_syn_positions:
+                    continue
+            out.append(le)
+        return out
+
     def run_analyzer(self):
         tab = self.get_current_editor_tab()
         if not tab:
@@ -1031,11 +1065,7 @@ class TextEditor(QMainWindow):
             tokens, lex_errors = self.scanner.analyze(text)
             success, syntax_errors = self.parser.analyze(tokens)
 
-            suppress_lex_if_const_invalid = any(
-                "Ожидалось ключевое слово const (недопустимый символ" in err.message
-                for err in syntax_errors
-            )
-            shown_lex_errors = [] if suppress_lex_if_const_invalid else lex_errors
+            shown_lex_errors = self._filter_lex_errors_for_display(text, lex_errors, syntax_errors)
             
             for token in tokens:
                 self.token_table.add_token(token)
@@ -1112,7 +1142,7 @@ class TextEditor(QMainWindow):
             self.set_status_message("Ошибка при анализе", "error")
     
     def _course_asset_href(self, filename: str) -> str:
-        path = os.path.join(os.path.dirname(__file__), "assets", filename)
+        path = os.path.join(_course_assets_base_dir(), filename)
         if not os.path.isfile(path):
             return ""
         return QUrl.fromLocalFile(os.path.abspath(path)).toString()

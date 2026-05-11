@@ -12,6 +12,8 @@ class SyntaxError:
 
 
 class Parser:
+    _CONST_LETTERS = frozenset("const")
+
     def __init__(self):
         self.tokens = []
         self.index = 0
@@ -20,6 +22,7 @@ class Parser:
     def reset(self):
         self.index = 0
         self.errors = []
+        self._skip_duplicate_real_msg = False
     
     def current(self):
         if self.index < len(self.tokens):
@@ -89,43 +92,159 @@ class Parser:
                 )
         return dp[m][n] <= 2
 
-    def _find_error_near_start(self):
-        stop_types = {
+    def _prefix_scan_stop_types(self):
+        return {
             TokenType.SEPARATOR_COLON,
             TokenType.OPERATOR_ASSIGN,
             TokenType.OPERATOR_EQUAL,
             TokenType.SEPARATOR_SEMICOLON,
         }
-        idx = self.index
+
+    def _looks_like_const_fragment(self, ident: str) -> bool:
+        """Обломок ключевого слова const (в т.ч. cons, con…), а не имя вроде «p»."""
+        v = ident.lower()
+        return "const".startswith(v) and len(v) <= 5
+
+    def _error_belongs_to_next_identifier_not_const(self, err_idx: int) -> bool:
+        """ERROR после однобуквенного идентификатора не из «const» — уже другое слово (p@ в p@i)."""
+        if err_idx == 0:
+            return False
+        prev = self.tokens[err_idx - 1]
+        if prev.type != TokenType.IDENTIFIER:
+            return False
+        if len(prev.value) != 1:
+            return False
+        return prev.value.lower() not in self._CONST_LETTERS
+
+    def _collect_error_chunks_near_start(self) -> List[str]:
+        """Только ERROR внутри испорченного «const», без символов из имени константы (p@i)."""
+        out: List[str] = []
+        idx = 0
         while idx < len(self.tokens):
-            token = self.tokens[idx]
-            if token.type in stop_types:
+            t = self.tokens[idx]
+            if t.type in self._prefix_scan_stop_types():
                 break
-            if token.type == TokenType.ERROR:
-                return token
+            if t.type == TokenType.ERROR:
+                if self._error_belongs_to_next_identifier_not_const(idx):
+                    break
+                out.append(t.value)
+                idx += 1
+                continue
             idx += 1
-        return None
+        return out
 
     def _format_invalid_symbol(self, value: str) -> str:
         if value and len(value) > 1 and all(ch == value[0] for ch in value):
             return f"недопустимый символ '{value[0]}' (повторение: {len(value)} раза)"
         return f"недопустимый символ '{value}'"
 
-    def _rewind_to_identifier_before_colon(self):
-        last_identifier_idx = None
-        idx = self.index
-        while idx < len(self.tokens):
-            token = self.tokens[idx]
-            if token.type == TokenType.SEPARATOR_COLON:
-                break
-            if token.type == TokenType.SEPARATOR_SEMICOLON:
-                break
-            if token.type == TokenType.IDENTIFIER:
-                last_identifier_idx = idx
-            idx += 1
-        if last_identifier_idx is not None:
-            self.index = last_identifier_idx
-    
+    def _format_invalid_symbols_in_const_prefix(self, chunks: List[str]) -> str:
+        if not chunks:
+            return ""
+        if len(chunks) == 1:
+            return self._format_invalid_symbol(chunks[0])
+        parts: List[str] = []
+        for c in chunks:
+            if c and len(c) > 1 and all(ch == c[0] for ch in c):
+                parts.append(f"«{c[0]}» (повторение: {len(c)} раза)")
+            else:
+                parts.append(f"«{c}»")
+        return "недопустимые символы: " + ", ".join(parts)
+
+    def _jump_after_invalid_const(self) -> None:
+        """После ошибки в слове const: встать на имя перед ':' или на сам ':'.
+
+        Раньше брали последний идентификатор до ':' по всей строке — из-за этого
+        курсор перескакивал на «readddl» и дальнейший разбор шёл не по тексту.
+        Отбрасываем пару идентификатор+':' только если идентификатор — хвост после
+        ERROR сразу после другого идентификатора (типичный случай con@st → «st»),
+        но не «const@ pi», где перед pi тоже ERROR, а до него нет обломка-идентификатора.
+        """
+        pairs: List[int] = []
+        n = len(self.tokens)
+
+        for i in range(n):
+            if self.tokens[i].type != TokenType.IDENTIFIER:
+                continue
+            if i + 1 >= n or self.tokens[i + 1].type != TokenType.ERROR:
+                continue
+            if self._looks_like_const_fragment(self.tokens[i].value):
+                continue
+            j = i + 2
+            while j < n and self.tokens[j].type == TokenType.IDENTIFIER:
+                j += 1
+            if j < n and self.tokens[j].type == TokenType.SEPARATOR_COLON:
+                self.index = i
+                return
+
+        for i in range(n - 1):
+            if (
+                self.tokens[i].type == TokenType.IDENTIFIER
+                and self.tokens[i + 1].type == TokenType.SEPARATOR_COLON
+            ):
+                pairs.append(i)
+
+        def is_junk_suffix(ident_idx: int) -> bool:
+            """Только хвост con@st → «st»/«t», не буква имени после @ (например i в p@i)."""
+            if ident_idx == 0:
+                return False
+            if self.tokens[ident_idx - 1].type != TokenType.ERROR:
+                return False
+            ident = self.tokens[ident_idx]
+            if ident.type != TokenType.IDENTIFIER:
+                return False
+            if ident.value.lower() not in ("st", "t"):
+                return False
+            for j in range(0, ident_idx - 1):
+                if self.tokens[j].type == TokenType.IDENTIFIER:
+                    return True
+            return False
+
+        good = [i for i in pairs if not is_junk_suffix(i)]
+        if good:
+            self.index = good[-1]
+            return
+
+        if pairs:
+            self.index = pairs[-1] + 1
+            return
+
+        for i in range(n - 1):
+            if (
+                self.tokens[i].type == TokenType.IDENTIFIER
+                and self.tokens[i + 1].type == TokenType.KEYWORD_REAL
+                and not is_junk_suffix(i)
+            ):
+                self.index = i
+                return
+
+        for i in range(n - 1):
+            if self.tokens[i].type != TokenType.IDENTIFIER:
+                continue
+            if self.tokens[i + 1].type != TokenType.IDENTIFIER:
+                continue
+            if is_junk_suffix(i):
+                continue
+            if any(
+                t.type == TokenType.SEPARATOR_COLON
+                for t in self.tokens[: i + 2]
+            ):
+                continue
+            if not any(
+                t.type == TokenType.OPERATOR_EQUAL
+                for t in self.tokens[i + 2 :]
+            ):
+                continue
+            self.index = i
+            return
+
+        colon_idx = next(
+            (i for i, t in enumerate(self.tokens) if t.type == TokenType.SEPARATOR_COLON),
+            None,
+        )
+        if colon_idx is not None:
+            self.index = colon_idx
+
     def analyze(self, tokens: List[Token]) -> Tuple[bool, List[SyntaxError]]:
         self.tokens = [t for t in tokens if t.type not in [TokenType.WHITESPACE, TokenType.NEWLINE]]
         self.reset()
@@ -135,21 +254,19 @@ class Parser:
             return False, self.errors
         
         has_error = False
-        suppress_missing_identifier_error = False
-        
-        # Для корректного восстановления и без каскадных ложных ошибок:
-        # если начало объявления не распознано как `const`, считаем конструкцию
-        # несоответствующей грамматике и выдаем только одну целевую ошибку.
+
+        # Если const испорчен (например con@st), лексер даёт ERROR — прыгаем к имени
+        # перед ':' или к ':', чтобы дальше разбирать хвост и не «проглатывать» pi.
         if not self.match(TokenType.KEYWORD_CONST, 'const'):
-            near_error = self._find_error_near_start()
-            if near_error:
+            err_chunks = self._collect_error_chunks_near_start()
+            if err_chunks:
+                sym = self._format_invalid_symbols_in_const_prefix(err_chunks)
                 self.add_error(
                     self.current(),
-                    f"Ожидалось ключевое слово const ({self._format_invalid_symbol(near_error.value)})",
+                    f"Ожидалось ключевое слово const ({sym})",
                 )
                 has_error = True
-                suppress_missing_identifier_error = True
-                self._rewind_to_identifier_before_colon()
+                self._jump_after_invalid_const()
             else:
                 self.add_error(self.current(), "Ожидалось ключевое слово const")
             has_error = True
@@ -166,8 +283,28 @@ class Parser:
             has_error = True
 
         if not self.match(TokenType.IDENTIFIER):
-            if not suppress_missing_identifier_error:
-                self.add_error(self.current(), "Отсутствует идентификатор")
+            tok = self.current()
+            if tok and tok.type == TokenType.ERROR:
+                if (
+                    self.index > 0
+                    and self.tokens[self.index - 1].type == TokenType.KEYWORD_CONST
+                ):
+                    self.add_error(
+                        tok,
+                        f"Ожидался идентификатор; {self._format_invalid_symbol(tok.value)}",
+                    )
+                has_error = True
+            elif tok and tok.type == TokenType.SEPARATOR_COLON:
+                self.add_error(tok, "Отсутствует идентификатор перед ':'")
+                has_error = True
+            elif tok is None:
+                self.add_error(None, "Отсутствует идентификатор")
+                has_error = True
+            else:
+                self.add_error(
+                    tok,
+                    f"Ожидался идентификатор; найдено «{tok.value}»",
+                )
                 has_error = True
             self._skip_until({
                 TokenType.IDENTIFIER,
@@ -196,7 +333,44 @@ class Parser:
 
         colon_count, colon_start = self._consume_repeats(TokenType.SEPARATOR_COLON)
         if colon_count == 0:
-            self.add_error(self.current(), "Отсутствует ':'")
+            ct = self.current()
+            if ct and ct.type == TokenType.KEYWORD_REAL:
+                self.add_error(
+                    ct,
+                    "Пропущено ':' между идентификатором и типом данных real",
+                )
+            elif ct and ct.type == TokenType.IDENTIFIER:
+                prev_tok = self.tokens[self.index - 1] if self.index > 0 else None
+                if prev_tok and prev_tok.type == TokenType.IDENTIFIER:
+                    self.add_error(prev_tok, "Пропущено ':' после идентификатора")
+                    self.add_error(
+                        ct,
+                        f"Ожидался тип данных real (найдено «{ct.value}»)",
+                    )
+                else:
+                    self.add_error(
+                        ct,
+                        "Пропущено ':' между идентификатором и типом данных real; "
+                        f"ожидалось ключевое слово «real», найдено «{ct.value}»",
+                    )
+                self._skip_duplicate_real_msg = True
+            elif (
+                ct
+                and ct.type == TokenType.ERROR
+                and self.index > 0
+                and self.tokens[self.index - 1].type == TokenType.IDENTIFIER
+            ):
+                self.add_error(
+                    ct,
+                    f"Ожидался идентификатор; {self._format_invalid_symbol(ct.value)}",
+                )
+            elif ct and ct.type == TokenType.ERROR:
+                self.add_error(
+                    ct,
+                    f"Недопустимый символ ({self._format_invalid_symbol(ct.value)}); ожидалось ':'",
+                )
+            else:
+                self.add_error(ct, "Отсутствует ':'")
             has_error = True
             self._skip_until({
                 TokenType.SEPARATOR_COLON,
@@ -211,8 +385,20 @@ class Parser:
             has_error = True
 
         if not self.match(TokenType.KEYWORD_REAL, 'real'):
-            self.add_error(self.current(), "Отсутствует 'real'")
-            has_error = True
+            rt = self.current()
+            if (
+                self._skip_duplicate_real_msg
+                and rt
+                and rt.type == TokenType.OPERATOR_EQUAL
+            ):
+                self._skip_duplicate_real_msg = False
+                has_error = True
+            elif rt is not None:
+                self.add_error(rt, "Ожидался тип данных real")
+                has_error = True
+            else:
+                self.add_error(None, "Ожидался тип данных real")
+                has_error = True
             self._skip_until({
                 TokenType.KEYWORD_REAL,
                 TokenType.OPERATOR_EQUAL,

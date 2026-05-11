@@ -38,6 +38,29 @@ def main():
             "invalid_repeated_symbol_inside_const_single_message",
         ),
         (
+            "con@#st pi: real = 3.14;",
+            [
+                "Ожидалось ключевое слово const (недопустимые символы: «@», «#»)",
+            ],
+            "multiple_invalid_symbols_in_const_prefix",
+        ),
+        (
+            "con@st pi real = 3.14;",
+            [
+                "Ожидалось ключевое слово const (недопустимый символ '@')",
+                "Пропущено ':' между идентификатором и типом данных real",
+            ],
+            "missing_colon_between_name_and_real_after_broken_const",
+        ),
+        (
+            "const pi ral = 3.14;",
+            [
+                "Пропущено ':' после идентификатора",
+                "Ожидался тип данных real (найдено «ral»)",
+            ],
+            "missing_colon_and_misspelled_real_as_two_errors",
+        ),
+        (
             "cost pi: real 3.14",
             [
                 "Ожидалось ключевое слово const",
