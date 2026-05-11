@@ -1,12 +1,14 @@
 import sys
 import os
 import re
+from functools import partial
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QTextEdit, QToolBar, QMenu, QFileDialog, QMessageBox, 
                              QSplitter, QStatusBar, QLabel, QTableWidget, 
                              QTableWidgetItem, QHeaderView, QTabWidget, QComboBox,
-                             QPushButton, QHBoxLayout, QLineEdit)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+                             QPushButton, QHBoxLayout, QLineEdit, QDialog,
+                             QDialogButtonBox, QTextBrowser)
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QUrl
 from PyQt6.QtGui import QAction, QKeySequence, QTextCursor, QFont, QIcon, QPixmap, QPainter, QColor, QBrush, QTextCharFormat
 from editor_widget import CodeEditor
 from scanner import Scanner, Token, TokenType
@@ -637,32 +639,36 @@ class TextEditor(QMainWindow):
         text_menu = menubar.addMenu("Текст")
         
         task_action = QAction("Постановка задачи", self)
-        task_action.triggered.connect(self.show_message)
+        task_action.triggered.connect(partial(self.show_course_material, "task"))
         text_menu.addAction(task_action)
         
         grammar_action = QAction("Грамматика", self)
-        grammar_action.triggered.connect(self.show_message)
+        grammar_action.triggered.connect(partial(self.show_course_material, "grammar"))
         text_menu.addAction(grammar_action)
         
         classification_action = QAction("Классификация грамматики", self)
-        classification_action.triggered.connect(self.show_message)
+        classification_action.triggered.connect(partial(self.show_course_material, "classification"))
         text_menu.addAction(classification_action)
         
         method_action = QAction("Метод анализа", self)
-        method_action.triggered.connect(self.show_message)
+        method_action.triggered.connect(partial(self.show_course_material, "method"))
         text_menu.addAction(method_action)
         
         example_action = QAction("Тестовый пример", self)
-        example_action.triggered.connect(self.show_message)
+        example_action.triggered.connect(partial(self.show_course_material, "example"))
         text_menu.addAction(example_action)
         
         references_action = QAction("Список литературы", self)
-        references_action.triggered.connect(self.show_message)
+        references_action.triggered.connect(partial(self.show_course_material, "references"))
         text_menu.addAction(references_action)
         
         source_action = QAction("Исходный код программы", self)
-        source_action.triggered.connect(self.show_message)
+        source_action.triggered.connect(partial(self.show_course_material, "source"))
         text_menu.addAction(source_action)
+        
+        coursework_action = QAction("Курсовая работа", self)
+        coursework_action.triggered.connect(partial(self.show_course_material, "coursework"))
+        text_menu.addAction(coursework_action)
         
         run_menu = menubar.addMenu("Пуск")
         run_action = QAction("Запустить анализатор", self)
@@ -1105,12 +1111,174 @@ class TextEditor(QMainWindow):
             self.output_area.append(traceback.format_exc())
             self.set_status_message("Ошибка при анализе", "error")
     
-    def show_message(self):
-        sender = self.sender()
-        if sender:
-            QMessageBox.information(self, sender.text(), 
-                                   f"Функция '{sender.text()}' будет реализована позже.")
-    
+    def _course_asset_href(self, filename: str) -> str:
+        path = os.path.join(os.path.dirname(__file__), "assets", filename)
+        if not os.path.isfile(path):
+            return ""
+        return QUrl.fromLocalFile(os.path.abspath(path)).toString()
+
+    def _course_img_html(self, filename: str, alt: str) -> str:
+        href = self._course_asset_href(filename)
+        if not href:
+            return (
+                f"<p><i>Файл изображения «{filename}» не найден в папке "
+                f"<span class='mono'>text_editor/assets</span>.</i></p>"
+            )
+        return f'<p><img src="{href}" alt="{alt}"/></p>'
+
+    def _show_course_dialog(self, title: str, inner_html: str) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        layout = QVBoxLayout(dlg)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        doc = (
+            "<html><head><meta charset=\"utf-8\"/>"
+            "<style>"
+            "body{font-family:'Segoe UI',Arial,sans-serif;font-size:11pt;line-height:1.45;margin:8px;}"
+            "h2{font-size:13pt;margin-top:0;} h3{font-size:12pt;}"
+            "ol{padding-left:1.35em;} ul{padding-left:1.35em;} "
+            ".mono{font-family:Consolas,'Courier New',monospace;font-size:10.5pt;}"
+            "img{max-width:100%;height:auto;}"
+            "</style></head><body>"
+            f"{inner_html}</body></html>"
+        )
+        browser.setHtml(doc)
+        layout.addWidget(browser)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+        dlg.resize(880, 640)
+        dlg.exec()
+
+    def show_course_material(self, section_id: str) -> None:
+        img_auto = self._course_img_html("automaton.png", "Граф автомата")
+        img_ok = self._course_img_html("test_example_ok.png", "Корректный пример")
+        img_err = self._course_img_html("test_example_errors.png", "Пример с ошибками")
+
+        bodies = {
+            "task": """
+<h2>Постановка задачи</h2>
+<p>Вещественные константы — это числа, содержащие целую и дробную части, разделённые
+десятичной точкой, значение которых не меняется в процессе выполнения программы.</p>
+<p>Для описания вещественных констант в языке Pascal используется служебное слово
+<code class='mono'>const</code>.</p>
+<p><b>Формат записи:</b> <code class='mono'>const имя_константы: real = значение;</code></p>
+<p><b>Примеры:</b></p>
+<ol>
+<li>Простое объявление вещественной константы: <code class='mono'>const pi: real = 3.14;</code></li>
+<li>Объявление вещественной константы числа <i>e</i>:
+<code class='mono'>const e: real = 2.71828;</code></li>
+</ol>
+<p>В связи с разработанной автоматной грамматикой G[‹START›] синтаксический анализатор
+(парсер) объявлений вещественных констант будет считать верными следующие записи:</p>
+<ol>
+<li><code class='mono'>const pi: real = 3.14;</code></li>
+<li><code class='mono'>const x: real = 0.5;</code></li>
+<li><code class='mono'>const myConst: real = 10.0;</code></li>
+<li><code class='mono'>const _gravity: real = 9.81;</code></li>
+</ol>
+""",
+            "grammar": """
+<h2>Грамматика</h2>
+<ol>
+<li>‹START› → <code class='mono'>const</code> &lt;SPACE&gt;</li>
+<li>&lt;SPACE&gt; → <code class='mono'>_</code> &lt;ID&gt;</li>
+<li>&lt;ID&gt; → letter &lt;ID_REST&gt;</li>
+<li>&lt;ID_REST&gt; → letter &lt;ID_REST&gt; | &lt;COLON&gt;</li>
+<li>&lt;COLON&gt; → <code class='mono'>:</code> &lt;TYPE&gt;</li>
+<li>&lt;TYPE&gt; → <code class='mono'>real</code> &lt;EQUALS&gt;</li>
+<li>&lt;EQUALS&gt; → <code class='mono'>=</code> &lt;NUMBER&gt;</li>
+<li>&lt;NUMBER&gt; → digit &lt;INT_REST&gt;</li>
+<li>&lt;INT_REST&gt; → digit &lt;INT_REST&gt; | <code class='mono'>.</code> &lt;FRAC_PART&gt;</li>
+<li>&lt;FRAC_PART&gt; → digit &lt;FRAC_REST&gt;</li>
+<li>&lt;FRAC_REST&gt; → digit &lt;SEMICOLON&gt;</li>
+<li>&lt;SEMICOLON&gt; → <code class='mono'>;</code></li>
+</ol>
+<p>Следуя формальному определению грамматики, представим G[‹START›] её составляющими:</p>
+<ul>
+<li><b>Vt</b> = { <code class='mono'>const</code>, a…z, A…Z, <code class='mono'>_</code>,
+<code class='mono'>:</code>, <code class='mono'>real</code>, <code class='mono'>=</code>,
+0…9, <code class='mono'>.</code>, <code class='mono'>;</code> }</li>
+<li><b>Vn</b> = { &lt;START&gt;, &lt;SPACE&gt;, &lt;ID&gt;, &lt;ID_REST&gt;, &lt;COLON&gt;, &lt;TYPE&gt;,
+&lt;EQUALS&gt;, &lt;NUMBER&gt;, &lt;INT_REST&gt;, &lt;FRAC_PART&gt;, &lt;FRAC_REST&gt;, &lt;SEMICOLON&gt; }</li>
+</ul>
+""",
+            "classification": """
+<h2>Классификация грамматики</h2>
+<p>Согласно классификации Хомского, грамматика G[‹START›] является <b>автоматной</b>,
+так как все продукции имеют вид A → aB или A → a:</p>
+<p class='mono'>G[A]: A → aB | a | Λ , a ∈ VT,  A, B ∈ VN.</p>
+<ul>
+<li><b>A → aB | a | Λ</b> — три варианта правил для нетерминала A:
+<ul>
+<li><b>A → aB</b> — терминал a, за которым следует нетерминал B.</li>
+<li><b>A → a</b> — одиночный терминал a.</li>
+<li><b>A → Λ</b> — пустая цепочка (ε-правило).</li>
+</ul></li>
+<li><b>a ∈ VT</b> — терминал.</li>
+<li><b>A, B ∈ VN</b> — нетерминалы.</li>
+</ul>
+""",
+            "method": f"""
+<h2>Метод анализа</h2>
+<p>Грамматика G[‹START›] является автоматной. Правила (1)–(11) для G[‹START›]
+реализованы на графе конечного автомата (см. рисунок 1).</p>
+<p>Сплошные стрелки на графе соответствуют синтаксически верному разбору объявлений
+вещественных констант языка Pascal; конечное состояние автомата означает успешное
+завершение разбора конструкции.</p>
+<h3>Рисунок 1. Граф метода анализа (конечный автомат)</h3>
+{img_auto}
+""",
+            "example": f"""
+<h2>Тестовый пример</h2>
+<p>Ниже приведены скриншоты работы приложения: успешный разбор корректной строки и
+разбор строки с несколькими синтаксическими ошибками.</p>
+<h3>Корректная строка</h3>
+<p><code class='mono'>const pi: real = 3.14;</code></p>
+{img_ok}
+<h3>Строка с ошибками</h3>
+<p><code class='mono'>1 const pi real === 3.;</code></p>
+{img_err}
+""",
+            "references": """
+<h2>Список литературы</h2>
+<ol>
+<li>Шорников Ю.В. Теория и практика языковых процессоров : учеб. пособие / Ю.В. Шорников.
+— Новосибирск: Изд-во НГТУ, 2022.</li>
+<li>Gries D. Designing Compilers for Digital Computers. New York, Jhon Wiley, 1971. 493 p.</li>
+<li>Теория формальных языков и компиляторов [Электронный ресурс] / Электрон. дан.
+URL: <a href="https://dispace.edu.nstu.ru/didesk/course/show/8594">https://dispace.edu.nstu.ru/didesk/course/show/8594</a>,
+свободный. Яз. рус. (дата обращения 10.04.2026).</li>
+</ol>
+""",
+            "source": """
+<h2>Исходный код программы</h2>
+<p>Репозиторий с исходным кодом на ветке <code class='mono'>kurs_fp</code>:</p>
+<p><a href="https://github.com/etnight15/Complier/tree/kurs_fp">https://github.com/etnight15/Complier/tree/kurs_fp</a></p>
+""",
+            "coursework": """
+<h2>Курсовая работа</h2>
+<p>Текст курсовой работы (Google Документы):</p>
+<p><a href="https://docs.google.com/document/d/1Kh1SSd_CD1VtqBUpuyMuwOhlihFwMrVO/edit?usp=sharing&amp;ouid=115459672282642477363&amp;rtpof=true&amp;sd=true">Открыть документ на Google Диске</a></p>
+""",
+        }
+        titles = {
+            "task": "Постановка задачи",
+            "grammar": "Грамматика",
+            "classification": "Классификация грамматики",
+            "method": "Метод анализа",
+            "example": "Тестовый пример",
+            "references": "Список литературы",
+            "source": "Исходный код программы",
+            "coursework": "Курсовая работа",
+        }
+        inner = bodies.get(section_id)
+        if inner is None:
+            QMessageBox.warning(self, "Ошибка", "Неизвестный раздел материалов.")
+            return
+        self._show_course_dialog(titles[section_id], inner)
+
     def show_help(self):
         help_text = """
         Команды меню Файл:

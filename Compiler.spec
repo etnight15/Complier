@@ -5,7 +5,7 @@ a = Analysis(
     ['text_editor\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('text_editor/assets', 'text_editor/assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
