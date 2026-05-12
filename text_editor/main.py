@@ -279,8 +279,7 @@ class TextEditor(QMainWindow):
         self.current_file = None
         self.text_changed = False
         self.scanner = Scanner()
-        from parser import Parser, SyntaxError
-        self.parser = Parser()  
+        self.parser = Parser()
         self.init_ui()
         
     def init_ui(self):
@@ -326,8 +325,10 @@ class TextEditor(QMainWindow):
 
     def _format_lex_error_message(self, value: str) -> str:
         if value and len(value) > 1 and all(ch == value[0] for ch in value):
-            return f"Недопустимый символ '{value[0]}' (повторение: {len(value)} раза)"
-        return f"Недопустимый символ '{value}'"
+            frag = f"недопустимый символ '{value[0]}' (повторение: {len(value)} раза)"
+        else:
+            frag = f"недопустимый символ '{value}'"
+        return f"Лексическая ошибка: {frag}"
         
     def create_search_panel(self):
         self.search_panel = QWidget()
@@ -1021,17 +1022,26 @@ class TextEditor(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при поиске: {str(e)}")
     
-    def _filter_lex_errors_for_display(self, text: str, lex_errors, syntax_errors) -> list:
-        """Не дублировать в таблице: лексические ERROR внутри испорченного const и те же позиции, что синтаксика «ожидался идентификатор»."""
+    def _filter_lex_errors_for_display(
+        self, text: str, lex_errors, syntax_errors, absorbed_real_positions=frozenset()
+    ) -> list:
+        """Не дублировать в таблице лексические ERROR там, где синтаксис уже выдал
+        «Ожидался идентификатор; …» или любую «Лексическая ошибка: …» на той же позиции,
+        а также позиции, поглощённые парсером при склейке слова «real»."""
         suppress_const_prefix = any(
-            err.message.startswith("Ожидалось ключевое слово const (")
+            err.message.startswith("Ожидалось ключевое слово const")
             for err in syntax_errors
         )
+        lex_syn_positions = {
+            (err.line, err.pos)
+            for err in syntax_errors
+            if err.message.startswith("Лексическая ошибка:")
+        }
         ident_syn_positions = {
             (err.line, err.pos)
             for err in syntax_errors
             if err.message.startswith("Ожидался идентификатор;")
-        }
+        } | lex_syn_positions
         colon_idx = text.find(":")
         colon_pos_1based = colon_idx + 1 if colon_idx >= 0 else None
         out = []
@@ -1042,6 +1052,8 @@ class TextEditor(QMainWindow):
                 ):
                     continue
                 if (le.line, le.start_pos) in ident_syn_positions:
+                    continue
+                if (le.line, le.start_pos) in absorbed_real_positions:
                     continue
             out.append(le)
         return out
@@ -1065,7 +1077,12 @@ class TextEditor(QMainWindow):
             tokens, lex_errors = self.scanner.analyze(text)
             success, syntax_errors = self.parser.analyze(tokens)
 
-            shown_lex_errors = self._filter_lex_errors_for_display(text, lex_errors, syntax_errors)
+            shown_lex_errors = self._filter_lex_errors_for_display(
+                text,
+                lex_errors,
+                syntax_errors,
+                self.parser.absorbed_real_junk_positions(),
+            )
             
             for token in tokens:
                 self.token_table.add_token(token)
