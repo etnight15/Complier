@@ -1,16 +1,29 @@
 import sys
 import os
 import re
+from functools import partial
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QTextEdit, QToolBar, QMenu, QFileDialog, QMessageBox, 
                              QSplitter, QStatusBar, QLabel, QTableWidget, 
                              QTableWidgetItem, QHeaderView, QTabWidget, QComboBox,
-                             QPushButton, QHBoxLayout, QLineEdit)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+                             QPushButton, QHBoxLayout, QLineEdit, QDialog,
+                             QDialogButtonBox, QTextBrowser)
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QUrl
 from PyQt6.QtGui import QAction, QKeySequence, QTextCursor, QFont, QIcon, QPixmap, QPainter, QColor, QBrush, QTextCharFormat
 from editor_widget import CodeEditor
 from scanner import Scanner, Token, TokenType
 from parser import Parser, SyntaxError
+from expr_scanner import ExprScanner, ExprToken
+from expr_parser import ExprParser, ExprSyntaxError
+ 
+
+def _course_assets_base_dir() -> str:
+    """Папка с PNG для курсовых материалов: из исходников или из распаковки PyInstaller (_MEIPASS)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        bundled = os.path.join(sys._MEIPASS, "text_editor", "assets")
+        if os.path.isdir(bundled):
+            return bundled
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
 class EditorTab(QWidget):
@@ -293,15 +306,169 @@ class SemanticTable(QTableWidget):
         if is_error:
             pink_bg = QBrush(QColor(255, 200, 200))
             red_fg = QBrush(QColor(180, 0, 0))
-            for item in (frag_item, loc_item, msg_item):
-                item.setBackground(pink_bg)
-                item.setForeground(red_fg)
+            for cell in (frag_item, loc_item, msg_item):
+                cell.setBackground(pink_bg)
+                cell.setForeground(red_fg)
 
         self.setItem(row, 0, frag_item)
         self.setItem(row, 1, loc_item)
         self.setItem(row, 2, msg_item)
 
         return row
+
+
+class QuadTable(QTableWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_table()
+
+    def setup_table(self):
+        self.setColumnCount(4)
+        self.setHorizontalHeaderLabels(["op", "arg1", "arg2", "result"])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setAlternatingRowColors(True)
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+
+    def clear_table(self):
+        self.setRowCount(0)
+
+    def add_quad(self, quad):
+        row = self.rowCount()
+        self.insertRow(row)
+        for col, value in enumerate((quad.op, quad.arg1, quad.arg2, quad.result)):
+            item = QTableWidgetItem(value)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.setItem(row, col, item)
+
+
+class ExprGrammarErrorTable(QTableWidget):
+    errorClicked = pyqtSignal(int, int, int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setColumnCount(3)
+        self.setHorizontalHeaderLabels(["неверный фрагмент", "местоположение", "Описание"])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.setAlternatingRowColors(True)
+        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.itemClicked.connect(self._on_item_clicked)
+
+    def _on_item_clicked(self, item):
+        row = item.row()
+        location_item = self.item(row, 1)
+        if location_item and location_item.toolTip():
+            try:
+                line, start_pos, end_pos = map(int, location_item.toolTip().split(","))
+                self.errorClicked.emit(line, start_pos, end_pos, row)
+            except Exception:
+                pass
+
+    def clear_table(self):
+        self.setRowCount(0)
+
+    def show_no_errors(self):
+        self.clear_table()
+        self.insertRow(0)
+        for col, text in enumerate(("—", "—", "Ошибок грамматики выражения нет.")):
+            item = QTableWidgetItem(text)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.setItem(0, col, item)
+
+    def add_error(self, fragment: str, line: int, start_pos: int, end_pos: int, message: str):
+        row = self.rowCount()
+        self.insertRow(row)
+        pink_bg = QBrush(QColor(255, 200, 200))
+        red_fg = QBrush(QColor(180, 0, 0))
+
+        frag_item = QTableWidgetItem(fragment)
+        loc_text = f"строка {line}, позиция {start_pos}"
+        loc_item = QTableWidgetItem(loc_text)
+        loc_item.setToolTip(f"{line},{start_pos},{end_pos}")
+        msg_item = QTableWidgetItem(message)
+
+        for item in (frag_item, loc_item, msg_item):
+            item.setBackground(pink_bg)
+            item.setForeground(red_fg)
+
+        self.setItem(row, 0, frag_item)
+        self.setItem(row, 1, loc_item)
+        self.setItem(row, 2, msg_item)
+
+
+class TetradsPolizPanel(QWidget):
+    """Вкладка «Тетрады и ПОЛИЗ» (разделённые области, как «Семантика и AST»)."""
+
+    errorClicked = pyqtSignal(int, int, int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet(
+            "font-weight: 600; padding: 6px 8px; background: #f5f5f5; border-bottom: 1px solid #ddd;"
+        )
+        layout.addWidget(self.status_label)
+
+        self.error_table = ExprGrammarErrorTable()
+        self.error_table.errorClicked.connect(self.errorClicked.emit)
+
+        self.quad_table = QuadTable()
+
+        self.poliz_output = QTextEdit()
+        self.poliz_output.setReadOnly(True)
+        self.poliz_output.setPlaceholderText(
+            "ПОЛИЗ и результат вычисления появятся для выражений из целых чисел…"
+        )
+
+        self.tetrads_poliz_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.tetrads_poliz_splitter.addWidget(self.quad_table)
+        self.tetrads_poliz_splitter.addWidget(self.poliz_output)
+        self.tetrads_poliz_splitter.setSizes([280, 320])
+
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.main_splitter.addWidget(self.error_table)
+        self.main_splitter.addWidget(self.tetrads_poliz_splitter)
+        self.main_splitter.setSizes([220, 380])
+
+        layout.addWidget(self.main_splitter)
+
+    def clear(self):
+        self.status_label.clear()
+        self.error_table.clear_table()
+        self.quad_table.clear_table()
+        self.poliz_output.clear()
+
+    def set_status(self, text: str, *, success: bool = True):
+        color = "#1e7e34" if success else "#c62828"
+        self.status_label.setStyleSheet(
+            f"font-weight: 600; padding: 6px 8px; color: {color}; "
+            "background: #f5f5f5; border-bottom: 1px solid #ddd;"
+        )
+        self.status_label.setText(text)
+
+    def set_quads(self, quads):
+        self.quad_table.clear_table()
+        for quad in quads:
+            self.quad_table.add_quad(quad)
+
+    def set_poliz(self, rpn, value, warning: str = ""):
+        self.poliz_output.clear()
+        self.poliz_output.append("ПОЛИЗ и вычисление (только для целых литералов)\n")
+        if warning:
+            self.poliz_output.append(f"⚠ {warning}\n")
+        if rpn:
+            self.poliz_output.append(f"ПОЛИЗ: {' '.join(rpn)}")
+            val_text = str(value) if value is not None else "—"
+            self.poliz_output.append(f"\nЗначение: {val_text}")
+        else:
+            self.poliz_output.append("ПОЛИЗ: —")
+            self.poliz_output.append("\nЗначение: —")
 
 
 def create_icon(char):
@@ -321,8 +488,9 @@ class TextEditor(QMainWindow):
         self.current_file = None
         self.text_changed = False
         self.scanner = Scanner()
-        from parser import Parser
-        self.parser = Parser()  
+        self.parser = Parser()
+        self.expr_scanner = ExprScanner()
+        self.expr_parser = ExprParser()
         self.init_ui()
         
     def init_ui(self):
@@ -337,7 +505,6 @@ class TextEditor(QMainWindow):
         
         self.create_menu_bar()
         self.create_toolbar()
-        self.create_search_panel()
         self.create_editor_tabs()
         self.create_output_tabs()
         
@@ -346,16 +513,33 @@ class TextEditor(QMainWindow):
         main_splitter.addWidget(self.output_tabs)
         main_splitter.setSizes([500, 400])
         
-        layout.addWidget(self.search_panel)
         layout.addWidget(main_splitter)
         
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_label = QLabel("Готов к работе")
         self.status_bar.addWidget(self.status_label)
+        self.set_status_message("Готов к работе")
         
         self.update_status_from_current_tab()
         self.apply_styles()
+
+    def set_status_message(self, message: str, state: str = "idle"):
+        colors = {
+            "idle": "#000000",
+            "success": "#1e7e34",
+            "error": "#c62828",
+        }
+        color = colors.get(state, colors["idle"])
+        self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self.status_label.setText(message)
+
+    def _format_lex_error_message(self, value: str) -> str:
+        if value and len(value) > 1 and all(ch == value[0] for ch in value):
+            frag = f"недопустимый символ '{value[0]}' (повторение: {len(value)} раза)"
+        else:
+            frag = f"недопустимый символ '{value}'"
+        return f"Лексическая ошибка: {frag}"
         
     def create_search_panel(self):
         self.search_panel = QWidget()
@@ -431,7 +615,7 @@ class TextEditor(QMainWindow):
         self.syntax_error_table = SyntaxErrorTable()
         self.syntax_error_table.errorClicked.connect(self.highlight_error)
         self.output_tabs.addTab(self.syntax_error_table, "Синтаксические ошибки")
-        
+
         self.search_result_table = SearchResultTable()
         self.search_result_table.resultClicked.connect(self.highlight_search_result)
         self.output_tabs.addTab(self.search_result_table, "Результаты поиска")
@@ -441,7 +625,9 @@ class TextEditor(QMainWindow):
 
         self.ast_output = QTextEdit()
         self.ast_output.setReadOnly(True)
-        self.ast_output.setPlaceholderText("Дерево AST появится после успешного синтаксического анализа…")
+        self.ast_output.setPlaceholderText(
+            "Дерево AST появится после успешного синтаксического анализа…"
+        )
 
         self.semantics_ast_splitter = QSplitter(Qt.Orientation.Vertical)
         self.semantics_ast_splitter.addWidget(self.semantic_table)
@@ -456,7 +642,19 @@ class TextEditor(QMainWindow):
 
         self.output_tabs.addTab(self.semantics_ast_panel, "Семантика и AST")
         self.tab_semantics_ast = self.output_tabs.count() - 1
-        
+
+        self.tetrads_poliz_panel = TetradsPolizPanel()
+        self.tetrads_poliz_panel.errorClicked.connect(self.highlight_error)
+
+        self.tetrads_poliz_tab = QWidget()
+        tetrads_poliz_layout = QVBoxLayout(self.tetrads_poliz_tab)
+        tetrads_poliz_layout.setContentsMargins(0, 0, 0, 0)
+        tetrads_poliz_layout.setSpacing(0)
+        tetrads_poliz_layout.addWidget(self.tetrads_poliz_panel)
+
+        self.output_tabs.addTab(self.tetrads_poliz_tab, "Тетрады и ПОЛИЗ")
+        self.tab_tetrads_poliz = self.output_tabs.count() - 1
+
     def create_new_editor_tab(self, file_path=None):
         tab = EditorTab()
         tab.textChanged.connect(self.on_text_changed)
@@ -700,39 +898,48 @@ class TextEditor(QMainWindow):
         text_menu = menubar.addMenu("Текст")
         
         task_action = QAction("Постановка задачи", self)
-        task_action.triggered.connect(self.show_message)
+        task_action.triggered.connect(partial(self.show_course_material, "task"))
         text_menu.addAction(task_action)
         
         grammar_action = QAction("Грамматика", self)
-        grammar_action.triggered.connect(self.show_message)
+        grammar_action.triggered.connect(partial(self.show_course_material, "grammar"))
         text_menu.addAction(grammar_action)
         
         classification_action = QAction("Классификация грамматики", self)
-        classification_action.triggered.connect(self.show_message)
+        classification_action.triggered.connect(partial(self.show_course_material, "classification"))
         text_menu.addAction(classification_action)
         
         method_action = QAction("Метод анализа", self)
-        method_action.triggered.connect(self.show_message)
+        method_action.triggered.connect(partial(self.show_course_material, "method"))
         text_menu.addAction(method_action)
         
         example_action = QAction("Тестовый пример", self)
-        example_action.triggered.connect(self.show_message)
+        example_action.triggered.connect(partial(self.show_course_material, "example"))
         text_menu.addAction(example_action)
         
         references_action = QAction("Список литературы", self)
-        references_action.triggered.connect(self.show_message)
+        references_action.triggered.connect(partial(self.show_course_material, "references"))
         text_menu.addAction(references_action)
         
         source_action = QAction("Исходный код программы", self)
-        source_action.triggered.connect(self.show_message)
+        source_action.triggered.connect(partial(self.show_course_material, "source"))
         text_menu.addAction(source_action)
+        
+        coursework_action = QAction("Курсовая работа", self)
+        coursework_action.triggered.connect(partial(self.show_course_material, "coursework"))
+        text_menu.addAction(coursework_action)
         
         run_menu = menubar.addMenu("Пуск")
         run_action = QAction("Запустить анализатор", self)
         run_action.setShortcut("F5")
         run_action.triggered.connect(self.run_analyzer)
         run_menu.addAction(run_action)
-        
+
+        expr_action = QAction("Анализ арифметического выражения", self)
+        expr_action.setShortcut("F6")
+        expr_action.triggered.connect(self.run_expr_analyzer)
+        run_menu.addAction(expr_action)
+
         help_menu = menubar.addMenu("Справка")
         
         help_action = QAction("Вызов справки", self)
@@ -837,9 +1044,18 @@ class TextEditor(QMainWindow):
         run_action.setToolTip("Запустить анализатор (F5)")
         run_action.triggered.connect(self.run_analyzer)
         toolbar.addAction(run_action)
-        
+
+        expr_action = QAction("Выражение", self)
+        expr_icon = QIcon.fromTheme("system-run")
+        if expr_icon.isNull():
+            expr_icon = create_icon("fx")
+        expr_action.setIcon(expr_icon)
+        expr_action.setToolTip("Анализ арифметического выражения (F6)")
+        expr_action.triggered.connect(self.run_expr_analyzer)
+        toolbar.addAction(expr_action)
+
         toolbar.addSeparator()
-        
+
         help_action = QAction("Справка", self)
         help_icon = QIcon.fromTheme("help-contents")
         if help_icon.isNull():
@@ -860,7 +1076,7 @@ class TextEditor(QMainWindow):
     
     def new_file(self):
         self.create_new_editor_tab()
-        self.status_label.setText("Создан новый файл")
+        self.set_status_message("Создан новый файл")
         
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -869,7 +1085,7 @@ class TextEditor(QMainWindow):
         )
         if file_path:
             self.create_new_editor_tab(file_path)
-            self.status_label.setText(f"Открыт файл: {file_path}")
+            self.set_status_message(f"Открыт файл: {file_path}")
                     
     def save_file(self):
         tab = self.get_current_editor_tab()
@@ -881,7 +1097,7 @@ class TextEditor(QMainWindow):
                 with open(tab.current_file, 'w', encoding='utf-8') as file:
                     file.write(tab.get_text())
                 tab.text_changed = False
-                self.status_label.setText(f"Файл сохранен: {os.path.basename(tab.current_file)}")
+                self.set_status_message(f"Файл сохранен: {os.path.basename(tab.current_file)}")
                 return True
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл: {str(e)}")
@@ -939,7 +1155,7 @@ class TextEditor(QMainWindow):
             line = tab.get_current_line()
             col = tab.get_current_column()
             chars = len(tab.get_text())
-            self.status_label.setText(f"Строка: {line}, Колонка: {col} | Символов: {chars}")
+            self.set_status_message(f"Строка: {line}, Колонка: {col} | Символов: {chars}")
         
     def undo(self):
         tab = self.get_current_editor_tab()
@@ -986,7 +1202,7 @@ class TextEditor(QMainWindow):
     def highlight_error(self, line, start_pos, end_pos, row):
         tab = self.get_current_editor_tab()
         if tab:
-            tab.highlight_error(line, start_pos, end_pos)
+            tab.go_to_position(line, start_pos)
     
     def highlight_search_result(self, line, start_pos, end_pos):
         tab = self.get_current_editor_tab()
@@ -1069,31 +1285,67 @@ class TextEditor(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при поиске: {str(e)}")
     
+    def _filter_lex_errors_for_display(
+        self, text: str, lex_errors, syntax_errors, absorbed_real_positions=frozenset()
+    ) -> list:
+        """Не дублировать в таблице лексические ERROR там, где синтаксис уже выдал
+        «Ожидался идентификатор; …» или любую «Лексическая ошибка: …» на той же позиции,
+        а также позиции, поглощённые парсером при склейке слова «real»."""
+        suppress_const_prefix = any(
+            err.message.startswith("Ожидалось ключевое слово const")
+            for err in syntax_errors
+        )
+        lex_syn_positions = {
+            (err.line, err.pos)
+            for err in syntax_errors
+            if err.message.startswith("Лексическая ошибка:")
+        }
+        ident_syn_positions = {
+            (err.line, err.pos)
+            for err in syntax_errors
+            if err.message.startswith("Ожидался идентификатор;")
+        } | lex_syn_positions
+        colon_idx = text.find(":")
+        colon_pos_1based = colon_idx + 1 if colon_idx >= 0 else None
+        out = []
+        for le in lex_errors:
+            if le.type == TokenType.ERROR:
+                if suppress_const_prefix and (
+                    colon_pos_1based is None or le.start_pos < colon_pos_1based
+                ):
+                    continue
+                if (le.line, le.start_pos) in ident_syn_positions:
+                    continue
+                if (le.line, le.start_pos) in absorbed_real_positions:
+                    continue
+            out.append(le)
+        return out
+
     def run_analyzer(self):
         tab = self.get_current_editor_tab()
         if not tab:
             return
-            
+
         text = tab.get_text()
         if not text.strip():
             QMessageBox.information(self, "Информация", "Введите текст для анализа")
             return
-        
+
         tab.clear_highlighting()
         self.token_table.clear_table()
         self.syntax_error_table.clear_table()
         self.output_area.clear()
         self.ast_output.clear()
         self.semantic_table.clear_table()
-        
+
         try:
             tokens, lex_errors = self.scanner.analyze(text)
-            
+
             for token in tokens:
                 self.token_table.add_token(token)
-            
+
             self.output_area.append("=== РЕЗУЛЬТАТЫ ПАРСЕРА ===\n")
-            
+
             if lex_errors:
                 self.output_area.append("Парсер не запущен: обнаружены лексические ошибки.\n")
                 self.output_area.append("=== ЛЕКСИЧЕСКИЕ ОШИБКИ ===")
@@ -1104,47 +1356,50 @@ class TextEditor(QMainWindow):
                     )
                     self.syntax_error_table.add_error(
                         error.value, error.line, error.start_pos, error.end_pos,
-                        f"недопустимый символ '{error.value}'"
+                        f"недопустимый символ '{error.value}'",
                     )
-                
-                if lex_errors:
-                    first = lex_errors[0]
-                    self.go_to_position(first.line, first.start_pos)
-                    self.output_tabs.setCurrentIndex(2)
-                    self.status_label.setText(f"Анализ завершен. Лексических ошибок: {len(lex_errors)}")
-                    return
-            
+
+                first = lex_errors[0]
+                self.go_to_position(first.line, first.start_pos)
+                self.output_tabs.setCurrentIndex(2)
+                self.set_status_message(
+                    f"Анализ завершен. Лексических ошибок: {len(lex_errors)}", "error"
+                )
+                return
+
             self.output_area.append("\n=== СИНТАКСИЧЕСКИЙ АНАЛИЗ ===\n")
             ast_root, syntax_errors, semantic_errors = self.parser.analyze_full(tokens)
-            
+
             if syntax_errors:
                 self.output_area.append(f"Найдено синтаксических ошибок: {len(syntax_errors)}\n")
                 self.output_area.append("=== СИНТАКСИЧЕСКИЕ ОШИБКИ ===")
-                
+
                 for error in syntax_errors:
                     self.output_area.append(
                         f"! '{error.fragment}' | стр.{error.line}, поз.{error.pos} | {error.message}"
                     )
-                    if error.fragment == "<конец>":
-                        end_pos = error.pos
-                    else:
-                        end_pos = error.pos + len(error.fragment) - 1
+                    end_pos = (
+                        error.pos
+                        if error.fragment == "<конец>"
+                        else error.pos + len(error.fragment) - 1
+                    )
                     self.syntax_error_table.add_error(
                         error.fragment, error.line, error.pos, end_pos, error.message
                     )
-                
-                if syntax_errors:
-                    first = syntax_errors[0]
-                    if first.fragment != "<конец>":
-                        end_pos = first.pos + len(first.fragment) - 1
-                        self.highlight_error(first.line, first.pos, end_pos, 0)
-                    else:
-                        self.go_to_position(first.line, first.pos)
-                    self.output_tabs.setCurrentIndex(2)
-                self.status_label.setText(f"Анализ завершен. Всего ошибок: {len(syntax_errors)}")
+
+                first = syntax_errors[0]
+                if first.fragment != "<конец>":
+                    end_pos = first.pos + len(first.fragment) - 1
+                    self.highlight_error(first.line, first.pos, end_pos, 0)
+                else:
+                    self.go_to_position(first.line, first.pos)
+                self.output_tabs.setCurrentIndex(2)
+                self.set_status_message(
+                    f"Анализ завершен. Всего ошибок: {len(syntax_errors)}", "error"
+                )
                 return
-            else:
-                self.output_area.append("Синтаксических ошибок не обнаружено. Строка корректна.")
+
+            self.output_area.append("Синтаксических ошибок не обнаружено. Строка корректна.")
 
             self.ast_output.append("=== AST ===\n")
             self.ast_output.append(self.parser.format_ast(ast_root))
@@ -1154,7 +1409,11 @@ class TextEditor(QMainWindow):
                     self.semantic_table.add_result(
                         error.fragment, error.line, error.pos, error.message, is_error=True
                     )
-                    end_pos = error.pos + len(error.fragment) - 1 if error.fragment != "<неизвестно>" else error.pos
+                    end_pos = (
+                        error.pos + len(error.fragment) - 1
+                        if error.fragment != "<неизвестно>"
+                        else error.pos
+                    )
                     self.syntax_error_table.add_error(
                         error.fragment, error.line, error.pos, end_pos, error.message
                     )
@@ -1162,29 +1421,333 @@ class TextEditor(QMainWindow):
                 first = semantic_errors[0]
                 self.go_to_position(first.line, first.pos)
             else:
-                self.semantic_table.add_result("-", 1, 1, "Семантических ошибок не обнаружено.", is_error=False)
+                self.semantic_table.add_result(
+                    "-", 1, 1, "Семантических ошибок не обнаружено.", is_error=False
+                )
 
             self.output_tabs.setCurrentIndex(self.tab_semantics_ast)
 
             total_errors = len(syntax_errors) + len(semantic_errors)
             self.output_area.append(f"\nКоличество ошибок: {total_errors}")
-            self.status_label.setText(f"Анализ завершен. Всего ошибок: {total_errors}")
+            status_state = "success" if total_errors == 0 else "error"
+            self.set_status_message(f"Анализ завершен. Всего ошибок: {total_errors}", status_state)
 
             if total_errors == 0:
                 self.output_area.append("\n✅ Программа синтаксически и семантически верна!")
-                
+
         except Exception as e:
             import traceback
             self.output_area.append(f"Ошибка при анализе: {str(e)}")
             self.output_area.append(traceback.format_exc())
-            self.status_label.setText("Ошибка при анализе")
+            self.set_status_message("Ошибка при анализе", "error")
 
-    def show_message(self):
-        sender = self.sender()
-        if sender:
-            QMessageBox.information(self, sender.text(), 
-                                   f"Функция '{sender.text()}' будет реализована позже.")
+    def run_expr_analyzer(self):
+        tab = self.get_current_editor_tab()
+        if not tab:
+            return
+
+        text = tab.get_text().strip()
+        if not text:
+            QMessageBox.information(self, "Информация", "Введите арифметическое выражение для анализа")
+            return
+
+        tab.clear_highlighting()
+        self.token_table.clear_table()
+        self.syntax_error_table.clear_table()
+        self.output_area.clear()
+        self.tetrads_poliz_panel.clear()
+
+        try:
+            tokens, lex_errors = self.expr_scanner.analyze(text)
+
+            for token in tokens:
+                if token.type.name != "WHITESPACE":
+                    self.token_table.add_token(token)
+
+            self.output_area.append("=== АРИФМЕТИЧЕСКОЕ ВЫРАЖЕНИЕ ===\n")
+            self.output_area.append(f"Вход: {text}\n")
+            self.output_area.append("=== ЛЕКСИЧЕСКИЙ АНАЛИЗ ===\n")
+            meaningful = [t for t in tokens if t.type.name != "WHITESPACE"]
+            self.output_area.append(f"Всего лексем: {len(meaningful)}")
+
+            if lex_errors:
+                self.output_area.append(f"Лексических ошибок: {len(lex_errors)}\n")
+                self.output_area.append(
+                    "⚠ Генерация тетрад и ПОЛИЗ пропущена: обнаружены лексические ошибки.\n"
+                )
+                self.output_area.append("=== ЛЕКСИЧЕСКИЕ ОШИБКИ ===")
+                self.tetrads_poliz_panel.set_status(
+                    "Лексические ошибки: тетрады и ПОЛИЗ не построены.", success=False
+                )
+                for error in lex_errors:
+                    msg = f"недопустимый символ '{error.value}'"
+                    self.output_area.append(
+                        f"! Строка {error.line}, позиция {error.start_pos}: {msg}"
+                    )
+                    self.syntax_error_table.add_error(
+                        error.value, error.line, error.start_pos, error.end_pos, msg
+                    )
+                    self.tetrads_poliz_panel.error_table.add_error(
+                        error.value, error.line, error.start_pos, error.end_pos, msg
+                    )
+                first = lex_errors[0]
+                self.go_to_position(first.line, first.start_pos)
+                self.output_tabs.setCurrentIndex(self.tab_tetrads_poliz)
+                self.set_status_message(
+                    f"Анализ выражения: лексических ошибок — {len(lex_errors)}", "error"
+                )
+                return
+
+            self.output_area.append("Лексических ошибок не обнаружено.\n")
+            self.output_area.append("=== СИНТАКСИЧЕСКИЙ АНАЛИЗ (рекурсивный спуск) ===\n")
+
+            result, quads, rpn, value, syn_errors, warning = self.expr_parser.analyze(tokens)
+
+            if syn_errors:
+                self.output_area.append(
+                    f"Найдено синтаксических ошибок: {len(syn_errors)}\n"
+                )
+                self.output_area.append(
+                    "⚠ Генерация тетрад и ПОЛИЗ пропущена: обнаружены синтаксические ошибки.\n"
+                )
+                self.output_area.append("=== СИНТАКСИЧЕСКИЕ ОШИБКИ ===")
+                self.tetrads_poliz_panel.set_status(
+                    "Синтаксические ошибки: тетрады и ПОЛИЗ не построены.", success=False
+                )
+                for error in syn_errors:
+                    self.output_area.append(
+                        f"! '{error.fragment}' | стр.{error.line}, поз.{error.pos} | {error.message}"
+                    )
+                    end_pos = (
+                        error.pos
+                        if error.fragment == "<конец>"
+                        else error.pos + len(error.fragment) - 1
+                    )
+                    self.syntax_error_table.add_error(
+                        error.fragment, error.line, error.pos, end_pos, error.message
+                    )
+                    self.tetrads_poliz_panel.error_table.add_error(
+                        error.fragment, error.line, error.pos, end_pos, error.message
+                    )
+                first = syn_errors[0]
+                if first.fragment != "<конец>":
+                    end_pos = first.pos + len(first.fragment) - 1
+                    self.highlight_error(first.line, first.pos, end_pos, 0)
+                else:
+                    self.go_to_position(first.line, first.pos)
+                self.output_tabs.setCurrentIndex(self.tab_tetrads_poliz)
+                self.set_status_message(
+                    f"Анализ выражения: синтаксических ошибок — {len(syn_errors)}", "error"
+                )
+                return
+
+            self.output_area.append("Синтаксических ошибок не обнаружено. Выражение корректно.")
+            if result:
+                self.output_area.append(f"Результат выражения (имя/временная): {result}\n")
+
+            self.tetrads_poliz_panel.set_status(
+                "Арифметическое выражение по грамматике E→TA разобрано без ошибок; тетрады построены.",
+                success=True,
+            )
+            self.tetrads_poliz_panel.error_table.show_no_errors()
+            self.tetrads_poliz_panel.set_quads(quads)
+
+            self.output_area.append("=== ТЕТРАДЫ ===\n")
+            if quads:
+                for i, quad in enumerate(quads, 1):
+                    self.output_area.append(
+                        f"{i}. ({quad.op}, {quad.arg1}, {quad.arg2}, {quad.result})"
+                    )
+            else:
+                self.output_area.append("(тетрады не сгенерированы)")
+
+            self.tetrads_poliz_panel.set_poliz(rpn, value, warning)
+            if warning:
+                self.output_area.append(f"\n⚠ {warning}")
+            if rpn:
+                rpn_str = " ".join(rpn)
+                self.output_area.append(f"\n=== ПОЛИЗ ===\n{rpn_str}")
+                self.output_area.append(f"Значение: {value}")
+
+            self.output_tabs.setCurrentIndex(self.tab_tetrads_poliz)
+            self.set_status_message("Анализ арифметического выражения завершён успешно", "success")
+            if not warning and quads:
+                self.output_area.append("\n✅ Выражение разобрано, тетрады и ПОЛИЗ построены.")
+
+        except Exception as e:
+            import traceback
+            self.output_area.append(f"Ошибка при анализе выражения: {str(e)}")
+            self.output_area.append(traceback.format_exc())
+            self.set_status_message("Ошибка при анализе выражения", "error")
     
+    def _course_asset_href(self, filename: str) -> str:
+        path = os.path.join(_course_assets_base_dir(), filename)
+        if not os.path.isfile(path):
+            return ""
+        return QUrl.fromLocalFile(os.path.abspath(path)).toString()
+
+    def _course_img_html(self, filename: str, alt: str) -> str:
+        href = self._course_asset_href(filename)
+        if not href:
+            return (
+                f"<p><i>Файл изображения «{filename}» не найден в папке "
+                f"<span class='mono'>text_editor/assets</span>.</i></p>"
+            )
+        return f'<p><img src="{href}" alt="{alt}"/></p>'
+
+    def _show_course_dialog(self, title: str, inner_html: str) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        layout = QVBoxLayout(dlg)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        doc = (
+            "<html><head><meta charset=\"utf-8\"/>"
+            "<style>"
+            "body{font-family:'Segoe UI',Arial,sans-serif;font-size:11pt;line-height:1.45;margin:8px;}"
+            "h2{font-size:13pt;margin-top:0;} h3{font-size:12pt;}"
+            "ol{padding-left:1.35em;} ul{padding-left:1.35em;} "
+            ".mono{font-family:Consolas,'Courier New',monospace;font-size:10.5pt;}"
+            "img{max-width:100%;height:auto;}"
+            "</style></head><body>"
+            f"{inner_html}</body></html>"
+        )
+        browser.setHtml(doc)
+        layout.addWidget(browser)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+        dlg.resize(880, 640)
+        dlg.exec()
+
+    def show_course_material(self, section_id: str) -> None:
+        img_auto = self._course_img_html("automaton.png", "Граф автомата")
+        img_ok = self._course_img_html("test_example_ok.png", "Корректный пример")
+        img_err = self._course_img_html("test_example_errors.png", "Пример с ошибками")
+
+        bodies = {
+            "task": """
+<h2>Постановка задачи</h2>
+<p>Вещественные константы — это числа, содержащие целую и дробную части, разделённые
+десятичной точкой, значение которых не меняется в процессе выполнения программы.</p>
+<p>Для описания вещественных констант в языке Pascal используется служебное слово
+<code class='mono'>const</code>.</p>
+<p><b>Формат записи:</b> <code class='mono'>const имя_константы: real = значение;</code></p>
+<p><b>Примеры:</b></p>
+<ol>
+<li>Простое объявление вещественной константы: <code class='mono'>const pi: real = 3.14;</code></li>
+<li>Объявление вещественной константы числа <i>e</i>:
+<code class='mono'>const e: real = 2.71828;</code></li>
+</ol>
+<p>В связи с разработанной автоматной грамматикой G[‹START›] синтаксический анализатор
+(парсер) объявлений вещественных констант будет считать верными следующие записи:</p>
+<ol>
+<li><code class='mono'>const pi: real = 3.14;</code></li>
+<li><code class='mono'>const x: real = 0.5;</code></li>
+<li><code class='mono'>const myConst: real = 10.0;</code></li>
+<li><code class='mono'>const _gravity: real = 9.81;</code></li>
+</ol>
+""",
+            "grammar": """
+<h2>Грамматика</h2>
+<ol>
+<li>‹START› → <code class='mono'>const</code> &lt;SPACE&gt;</li>
+<li>&lt;SPACE&gt; → <code class='mono'>_</code> &lt;ID&gt;</li>
+<li>&lt;ID&gt; → letter &lt;ID_REST&gt;</li>
+<li>&lt;ID_REST&gt; → letter &lt;ID_REST&gt; | &lt;COLON&gt;</li>
+<li>&lt;COLON&gt; → <code class='mono'>:</code> &lt;TYPE&gt;</li>
+<li>&lt;TYPE&gt; → <code class='mono'>real</code> &lt;EQUALS&gt;</li>
+<li>&lt;EQUALS&gt; → <code class='mono'>=</code> &lt;NUMBER&gt;</li>
+<li>&lt;NUMBER&gt; → digit &lt;INT_REST&gt;</li>
+<li>&lt;INT_REST&gt; → digit &lt;INT_REST&gt; | <code class='mono'>.</code> &lt;FRAC_PART&gt;</li>
+<li>&lt;FRAC_PART&gt; → digit &lt;FRAC_REST&gt;</li>
+<li>&lt;FRAC_REST&gt; → digit &lt;SEMICOLON&gt;</li>
+<li>&lt;SEMICOLON&gt; → <code class='mono'>;</code></li>
+</ol>
+<p>Следуя формальному определению грамматики, представим G[‹START›] её составляющими:</p>
+<ul>
+<li><b>Vt</b> = { <code class='mono'>const</code>, a…z, A…Z, <code class='mono'>_</code>,
+<code class='mono'>:</code>, <code class='mono'>real</code>, <code class='mono'>=</code>,
+0…9, <code class='mono'>.</code>, <code class='mono'>;</code> }</li>
+<li><b>Vn</b> = { &lt;START&gt;, &lt;SPACE&gt;, &lt;ID&gt;, &lt;ID_REST&gt;, &lt;COLON&gt;, &lt;TYPE&gt;,
+&lt;EQUALS&gt;, &lt;NUMBER&gt;, &lt;INT_REST&gt;, &lt;FRAC_PART&gt;, &lt;FRAC_REST&gt;, &lt;SEMICOLON&gt; }</li>
+</ul>
+""",
+            "classification": """
+<h2>Классификация грамматики</h2>
+<p>Согласно классификации Хомского, грамматика G[‹START›] является <b>автоматной</b>,
+так как все продукции имеют вид A → aB или A → a:</p>
+<p class='mono'>G[A]: A → aB | a | Λ , a ∈ VT,  A, B ∈ VN.</p>
+<ul>
+<li><b>A → aB | a | Λ</b> — три варианта правил для нетерминала A:
+<ul>
+<li><b>A → aB</b> — терминал a, за которым следует нетерминал B.</li>
+<li><b>A → a</b> — одиночный терминал a.</li>
+<li><b>A → Λ</b> — пустая цепочка (ε-правило).</li>
+</ul></li>
+<li><b>a ∈ VT</b> — терминал.</li>
+<li><b>A, B ∈ VN</b> — нетерминалы.</li>
+</ul>
+""",
+            "method": f"""
+<h2>Метод анализа</h2>
+<p>Грамматика G[‹START›] является автоматной. Правила (1)–(11) для G[‹START›]
+реализованы на графе конечного автомата (см. рисунок 1).</p>
+<p>Сплошные стрелки на графе соответствуют синтаксически верному разбору объявлений
+вещественных констант языка Pascal; конечное состояние автомата означает успешное
+завершение разбора конструкции.</p>
+<h3>Рисунок 1. Граф метода анализа (конечный автомат)</h3>
+{img_auto}
+""",
+            "example": f"""
+<h2>Тестовый пример</h2>
+<p>Ниже приведены скриншоты работы приложения: успешный разбор корректной строки и
+разбор строки с несколькими синтаксическими ошибками.</p>
+<h3>Корректная строка</h3>
+<p><code class='mono'>const pi: real = 3.14;</code></p>
+{img_ok}
+<h3>Строка с ошибками</h3>
+<p><code class='mono'>1 const pi real === 3.;</code></p>
+{img_err}
+""",
+            "references": """
+<h2>Список литературы</h2>
+<ol>
+<li>Шорников Ю.В. Теория и практика языковых процессоров : учеб. пособие / Ю.В. Шорников.
+— Новосибирск: Изд-во НГТУ, 2022.</li>
+<li>Gries D. Designing Compilers for Digital Computers. New York, Jhon Wiley, 1971. 493 p.</li>
+<li>Теория формальных языков и компиляторов [Электронный ресурс] / Электрон. дан.
+URL: <a href="https://dispace.edu.nstu.ru/didesk/course/show/8594">https://dispace.edu.nstu.ru/didesk/course/show/8594</a>,
+свободный. Яз. рус. (дата обращения 10.04.2026).</li>
+</ol>
+""",
+            "source": """
+<h2>Исходный код программы</h2>
+<p>Репозиторий с исходным кодом на ветке <code class='mono'>kurs_fp</code>:</p>
+<p><a href="https://github.com/etnight15/Complier/tree/kurs_fp">https://github.com/etnight15/Complier/tree/kurs_fp</a></p>
+""",
+            "coursework": """
+<h2>Курсовая работа</h2>
+<p>Текст курсовой работы (Google Документы):</p>
+<p><a href="https://docs.google.com/document/d/1Kh1SSd_CD1VtqBUpuyMuwOhlihFwMrVO/edit?usp=sharing&amp;ouid=115459672282642477363&amp;rtpof=true&amp;sd=true">Открыть документ на Google Диске</a></p>
+""",
+        }
+        titles = {
+            "task": "Постановка задачи",
+            "grammar": "Грамматика",
+            "classification": "Классификация грамматики",
+            "method": "Метод анализа",
+            "example": "Тестовый пример",
+            "references": "Список литературы",
+            "source": "Исходный код программы",
+            "coursework": "Курсовая работа",
+        }
+        inner = bodies.get(section_id)
+        if inner is None:
+            QMessageBox.warning(self, "Ошибка", "Неизвестный раздел материалов.")
+            return
+        self._show_course_dialog(titles[section_id], inner)
+
     def show_help(self):
         help_text = """
         Команды меню Файл:
@@ -1203,23 +1766,25 @@ class TextEditor(QMainWindow):
         - Удалить (Del) - удалить выделенный текст
         - Выделить все (Ctrl+A) - выделить весь текст
         
-        Поиск подстрок:
-        
-        1. Обычный поиск - поиск точного совпадения строки
-        2. Регулярное выражение - поиск по шаблону регулярного выражения
-        3. Целое слово - поиск точного совпадения целого слова
-        
-        Примеры регулярных выражений:
-        - \\d+ - поиск чисел
-        - [a-zA-Z]+ - поиск слов
-        - ^const - поиск строк, начинающихся с const
-        - ;$ - поиск строк, заканчивающихся на ;
+        Назначение программы:
+        - Лексический анализ входного текста
+        - Синтаксический анализ входного текста
         """
         
         QMessageBox.information(self, "Справка", help_text)
         
     def show_about(self):
-        about_text = "Compiler v4.0\nАвтор: Марков Д.Д.\n2026\n\nДобавлен модуль поиска подстрок с использованием регулярных выражений"
+        about_text = (
+            "<div style='font-size: 11pt; line-height: 1.45;'>"
+            "<h3 style='margin-bottom: 8px;'>Compiler</h3>"
+            "<p><b>Студент:</b> Марков Данил Дмитриевич<br>"
+            "<b>Год:</b> 2026<br>"
+            "<b>Вариант курсовой работы:</b> Объявление вещественной константы с "
+            "инициализацией на языке Pascal</p>"
+            "<p>Приложение представляет собой текстовый редактор, который в дальнейшем "
+            "будет расширен до полноценного языкового процессора для анализа.</p>"
+            "</div>"
+        )
         QMessageBox.about(self, "О программе", about_text)
 
 
