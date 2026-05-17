@@ -280,6 +280,68 @@ python -m pip install PyQt6
 python main.py
 ```
 5. В текством редакторе можно вводить текст и запускать нажимая кнопку "Пуск" (F5)/.
+
+# Лабораторная работа №6
+
+## Название
+Создание внутренней формы представления программы
+
+## Вариант задания
+Грамматика на языке Pascal Язык программирования: Pascal
+
+Полное определение грамматики:
+```
+E → TA
+A → ε | + TA | - TA
+T → FB
+B → ε | * FB | / FB
+F → num | id | (E)
+id → letter {letter | digit}
+num → digit {digit}
+```
+
+Примеры верных строк:
+```
+1 + 2 * 3
+(1 + 2) * 3
+a+1
+(10 + 5) * 2 - 3
+```
+## Лексические и синтаксические ошибки
+### Диаграмма лексера:
+
+<img width="421" height="1461" alt="Диаграмма без названия drawio (5)" src="https://github.com/user-attachments/assets/494e9ca9-1e13-43a9-b9f1-41baaf1c9de1" />
+
+### Схема рекурсивного спуска:
+
+<img width="732" height="615" alt="image" src="https://github.com/user-attachments/assets/d53663dc-0de4-43d4-8efe-05bc37fa2c0a" />
+
+### Тестовые примеры:
+
+<img width="1241" height="805" alt="image" src="https://github.com/user-attachments/assets/9e768a38-1a3d-4a5e-817a-c9e66efb6284" />
+
+<img width="1240" height="809" alt="image" src="https://github.com/user-attachments/assets/7a740793-6092-4a09-b0eb-5452b0cc3b7e" />
+
+<img width="1239" height="803" alt="image" src="https://github.com/user-attachments/assets/7c0427c5-58ce-4266-ba8a-234a3c04d43e" />
+
+## Внутренняя форма представления программы (тетрады)
+<img width="1279" height="180" alt="image" src="https://github.com/user-attachments/assets/07434f04-0857-4e3f-a941-740b2f952360" />
+
+## ПОЛИЗ
+<img width="1282" height="119" alt="image" src="https://github.com/user-attachments/assets/2b2a7f35-e75f-47aa-af36-a7ea7111e7f6" />
+
+
+
+
+
+
+
+
+
+
+
+
+
                                                 
 
 
