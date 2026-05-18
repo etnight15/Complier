@@ -61,7 +61,6 @@ class ExprToken:
 
 
 class ExprScanner:
-    """Лексический анализатор арифметических выражений (id, num, + - * /, скобки)."""
 
     def __init__(self):
         self.tokens: List[ExprToken] = []

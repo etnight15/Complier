@@ -18,7 +18,6 @@ from expr_parser import ExprParser, ExprSyntaxError
  
 
 def _course_assets_base_dir() -> str:
-    """Папка с PNG для курсовых материалов: из исходников или из распаковки PyInstaller (_MEIPASS)."""
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         bundled = os.path.join(sys._MEIPASS, "text_editor", "assets")
         if os.path.isdir(bundled):
@@ -398,7 +397,6 @@ class ExprGrammarErrorTable(QTableWidget):
 
 
 class TetradsPolizPanel(QWidget):
-    """Вкладка «Тетрады и ПОЛИЗ» (разделённые области, как «Семантика и AST»)."""
 
     errorClicked = pyqtSignal(int, int, int, int)
 
@@ -1288,9 +1286,6 @@ class TextEditor(QMainWindow):
     def _filter_lex_errors_for_display(
         self, text: str, lex_errors, syntax_errors, absorbed_real_positions=frozenset()
     ) -> list:
-        """Не дублировать в таблице лексические ERROR там, где синтаксис уже выдал
-        «Ожидался идентификатор; …» или любую «Лексическая ошибка: …» на той же позиции,
-        а также позиции, поглощённые парсером при склейке слова «real»."""
         suppress_const_prefix = any(
             err.message.startswith("Ожидалось ключевое слово const")
             for err in syntax_errors

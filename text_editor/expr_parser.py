@@ -21,13 +21,6 @@ class Quad:
 
 
 class ExprParser:
-    """
-    Синтаксический анализатор арифметических выражений методом рекурсивного спуска.
-
-    E → TA | A → ε | + TA | - TA
-    T → FB | B → ε | * FB | / FB
-    F → num | id | (E)
-    """
 
     def __init__(self):
         self.tokens: List[ExprToken] = []
@@ -211,7 +204,6 @@ class ExprParser:
 
     @staticmethod
     def build_rpn_dijkstra(tokens: List[ExprToken]) -> List[str]:
-        """ПОЛИЗ (алгоритм сортировочной станции Дейкстры). Только для целых чисел."""
         precedence = {
             ExprTokenType.PLUS: 1,
             ExprTokenType.MINUS: 1,
@@ -294,10 +286,6 @@ class ExprParser:
     def analyze(
         self, tokens: List[ExprToken]
     ) -> Tuple[Optional[str], List[Quad], List[str], Optional[int], List[ExprSyntaxError], str]:
-        """
-        Полный разбор: тетрады и (при только целых числах) ПОЛИЗ и значение.
-        Возвращает: (результат, тетрады, rpn, значение, ошибки, предупреждение).
-        """
         if any(t.type == ExprTokenType.ERROR for t in tokens):
             return (
                 None,
