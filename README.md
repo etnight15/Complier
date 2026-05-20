@@ -330,6 +330,122 @@ a+1
 ## ПОЛИЗ
 <img width="1282" height="119" alt="image" src="https://github.com/user-attachments/assets/2b2a7f35-e75f-47aa-af36-a7ea7111e7f6" />
 
+# Лабораторная работа №7
+## Название 
+Преобразование и анализ кода с использованием Clang и LLVM
+
+## Цель работы
+Познакомиться с инструментами Clang и LLVM, научиться получать абстрактное синтаксическое дерево (AST) и промежуточное представление (LLVM IR) для кода на C/C++, применять базовые оптимизации, строить граф потока управления (CFG), а также проанализировать влияние оптимизаций на синтаксические конструкции языка.
+
+## Постановка задачи
+1. Установить Clang, LLVM, opt и Graphviz.
+2. Скомпилировать простой C-файл и получить AST и LLVM IR.
+3. Использовать opt для оптимизации IR.
+4. Построить CFG до и после оптимизаций.
+5. Выполнить индивидуальное задание по варианту.
+
+## Установка и подготовка среды
+Команда установки:
+```
+sudo apt update
+sudo apt install clang llvm graphviz -y
+```
+<img width="829" height="315" alt="image" src="https://github.com/user-attachments/assets/639b9c7a-e69c-4ab3-a581-3f77d6315e06" />
+
+Создание рабочей папки:
+```
+mkdir -p ~/lab7
+cd ~/lab7
+```
+<img width="465" height="68" alt="image" src="https://github.com/user-attachments/assets/71b01133-2847-4b70-b5a4-66e92f4ada1d" />
+
+## Общая часть работы
+### Заданный исходный код
+```
+#include <stdio.h>
+
+int square(int x) {
+    return x * x;
+}
+
+int main() {
+    int a = 5;
+    int b = square(a);
+    printf("%d\n", b);
+    return 0;
+}
+```
+
+### Получение AST
+Команда:
+```
+clang -Xclang -ast-dump -fsyntax-only main.c
+```
+Результат:
+<img width="1855" height="820" alt="image" src="https://github.com/user-attachments/assets/abb41683-0a17-4e03-bde7-a6c7efdddaa4" />
+
+### Генерация LLVM IR без оптимизаций (-O0)
+Команда: 
+```
+clang -O0 -S -emit-llvm main.c -o main_O0.ll
+```
+Результат:
+<img width="1615" height="846" alt="image" src="https://github.com/user-attachments/assets/291ff4d1-d3df-42aa-ac88-36ec5bb1a552" />
+
+### Генерация LLVM IR с оптимизацией (-O2)
+Команда:
+```
+clang -O2 -S -emit-llvm main.c -o main_O2.ll
+```
+Резульат:
+<img width="1789" height="716" alt="image" src="https://github.com/user-attachments/assets/3296963e-c781-4ea7-8601-b5f85d9a950a" />
+
+### Оптимизация IR через opt
+Команда:
+```
+opt -passes=default<O2> -S main_O0.ll -o main_opt_O2.ll
+```
+
+Результат:
+<img width="1348" height="685" alt="image" src="https://github.com/user-attachments/assets/4a056ca4-4187-47aa-9344-5aa857c48d9f" />
+
+### Построение CFG 
+До оптимизации:
+```
+opt -passes=dot-cfg -disable-output main_O0.ll
+dot -Tpng .main.dot -o main_cfg_O0.png
+```
+
+После оптимизации:
+```
+opt -passes=dot-cfg -disable-output main_O2.ll
+dot -Tpng .main.dot -o main_cfg_O2.png
+```
+
+CFG для main до оптимизации (-O0):
+<img width="781" height="306" alt="image" src="https://github.com/user-attachments/assets/f910ebeb-a83e-4e8b-8449-f789e5082259" />
+
+
+CFG для main после оптимизации (-O2):
+
+<img width="660" height="147" alt="image" src="https://github.com/user-attachments/assets/4d0d8132-9f8b-47fe-9d2a-7d2db4e4fdc0" />
+
+### Выводы по общей части
+1. С помощью Clang можно получить полную структуру AST и IR, а также CGF;
+2. LLVM предоставляет гибкие инструменты анализа и оптимизации;
+3. Промежуточное представление кода удобно для написания компиляторных трансформаций.
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
