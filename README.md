@@ -360,7 +360,7 @@ cd ~/lab7
 <img width="465" height="68" alt="image" src="https://github.com/user-attachments/assets/71b01133-2847-4b70-b5a4-66e92f4ada1d" />
 
 ## Общая часть работы
-### Заданный исходный код
+## Заданный исходный код
 ```
 #include <stdio.h>
 
@@ -376,7 +376,7 @@ int main() {
 }
 ```
 
-### Получение AST
+## Получение AST
 Команда:
 ```
 clang -Xclang -ast-dump -fsyntax-only main.c
@@ -384,7 +384,7 @@ clang -Xclang -ast-dump -fsyntax-only main.c
 Результат:
 <img width="1855" height="820" alt="image" src="https://github.com/user-attachments/assets/abb41683-0a17-4e03-bde7-a6c7efdddaa4" />
 
-### Генерация LLVM IR без оптимизаций (-O0)
+## Генерация LLVM IR без оптимизаций (-O0)
 Команда: 
 ```
 clang -O0 -S -emit-llvm main.c -o main_O0.ll
@@ -392,7 +392,7 @@ clang -O0 -S -emit-llvm main.c -o main_O0.ll
 Результат:
 <img width="1615" height="846" alt="image" src="https://github.com/user-attachments/assets/291ff4d1-d3df-42aa-ac88-36ec5bb1a552" />
 
-### Генерация LLVM IR с оптимизацией (-O2)
+## Генерация LLVM IR с оптимизацией (-O2)
 Команда:
 ```
 clang -O2 -S -emit-llvm main.c -o main_O2.ll
@@ -400,7 +400,7 @@ clang -O2 -S -emit-llvm main.c -o main_O2.ll
 Резульат:
 <img width="1789" height="716" alt="image" src="https://github.com/user-attachments/assets/3296963e-c781-4ea7-8601-b5f85d9a950a" />
 
-### Оптимизация IR через opt
+## Оптимизация IR через opt
 Команда:
 ```
 opt -passes=default<O2> -S main_O0.ll -o main_opt_O2.ll
@@ -409,7 +409,7 @@ opt -passes=default<O2> -S main_O0.ll -o main_opt_O2.ll
 Результат:
 <img width="1348" height="685" alt="image" src="https://github.com/user-attachments/assets/4a056ca4-4187-47aa-9344-5aa857c48d9f" />
 
-### Построение CFG 
+## Построение CFG 
 До оптимизации:
 ```
 opt -passes=dot-cfg -disable-output main_O0.ll
@@ -430,18 +430,90 @@ CFG для main после оптимизации (-O2):
 
 <img width="660" height="147" alt="image" src="https://github.com/user-attachments/assets/4d0d8132-9f8b-47fe-9d2a-7d2db4e4fdc0" />
 
-### Выводы по общей части
+## Выводы по общей части
 1. С помощью Clang можно получить полную структуру AST и IR, а также CGF;
 2. LLVM предоставляет гибкие инструменты анализа и оптимизации;
 3. Промежуточное представление кода удобно для написания компиляторных трансформаций.
 
 
+# Индивидуальная часть работы
+
+## Вариант задания
+Вещественные константы
+
+## Исходный код
+```
+const double PI = 3.141592653589793;
+int main() {
+double r = 2.0;
+double area = PI * r * r;
+return (int)area;
+}
+```
+
+## Задания по варианту
+1. Получите IR для -O0.
+2. Получите IR для -O2. Произошло ли свертывание константы?
+3. Примените -constprop, -globalopt, -ipsccp.
+4. Сравните CFG.
+5. Сделайте вывод о том, когда вещественная константа
+вычисляется на этапе компиляции?
+
+## Задание 1: Получите IR для -O0.
+Команда: 
+```
+clang -O0 -S -emit-llvm const.c -o const_O0.ll
+```
+
+Результат: 
+<img width="1762" height="720" alt="image" src="https://github.com/user-attachments/assets/d48f2945-5ec6-4805-853e-91170e4b6e46" />
+
+## Задание 2: Получите IR для -O2.
+Команда:
+```
+clang -O2 -S -emit-llvm const.c -o const_O2.ll
+```
+Результат:
+<img width="1848" height="626" alt="image" src="https://github.com/user-attachments/assets/5d7deeb5-d244-4a29-a2a5-c60c505bcb7d" />
 
 
+## Задание 3: Примените -constprop, -globalopt, -ipsccp.
 
+Применение -constprop:
+Команда:
+```
+opt -passes=instcombine -S const.ll -o const_constprop.ll
+```
+Результат:
+<img width="1765" height="741" alt="image" src="https://github.com/user-attachments/assets/402cf97c-5568-46d8-b9b7-0fc5a7f696d2" />
 
+CFG:
 
+<img width="511" height="350" alt="image" src="https://github.com/user-attachments/assets/ff50de37-bd1b-4bb9-bbd5-7f3fffd2d4ef" />
 
+Применение -globalopt:
+Команда:
+```
+opt -passes=globalopt -S const.ll -o const_globalopt.ll
+```
+Результат:
+<img width="1767" height="722" alt="image" src="https://github.com/user-attachments/assets/042d5667-abc2-45fd-a5bd-f34a21aad8a1" />
+
+CFG:
+
+<img width="503" height="344" alt="image" src="https://github.com/user-attachments/assets/71988a5f-9ae7-4902-a355-ec2c1e33f1a8" />
+
+Применение -ipsccp:
+Команда:
+```
+opt -passes=ipsccp -S const.ll -o const_ipsccp.ll
+```
+Результат:
+<img width="1756" height="729" alt="image" src="https://github.com/user-attachments/assets/80dfd2bd-975c-4537-ac96-25cd4ace6cb2" />
+
+CFG:
+
+<img width="503" height="345" alt="image" src="https://github.com/user-attachments/assets/8ade85f5-0d71-41aa-a366-ebeba13bb59a" />
 
 
 
