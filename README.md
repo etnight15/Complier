@@ -608,12 +608,19 @@ CFG - это ориентированный граф функции, где:
 В IR нет синтаксического разнообразия: любые циклы (for, while, do-while) в IR превращаются в одинаковые базовые блоки и переходы br. Действует строгое правило SSA, благодаря которому легко отслеживать, откуда взялось значение в регистре. Граф CFG дает четкую математическую модель связей в коде, которую невозможно построить простым анализом текста на С из-за сложных областей видимости и макросов.
 
 ## Дополнительное задание
-### Консткруция: 
-```
-const pi: real = 3.14;
-```
+## Оптимизация 1:
+### Блок-схема
+<img width="406" height="616" alt="image" src="https://github.com/user-attachments/assets/63b9e48a-8085-40bd-a199-0d6f6e103e28" />
 
+### Работа программы:
+<img width="1351" height="745" alt="image" src="https://github.com/user-attachments/assets/d45b914c-98a9-4d8f-bd50-a07168579fb1" />
 
+## Оптимизация 2:
+### Блок-схема
+<img width="381" height="646" alt="image" src="https://github.com/user-attachments/assets/c12ff6ed-74f4-47d4-b68a-1229b3e9df12" />
+
+### Работа программы
+<img width="1338" height="788" alt="image" src="https://github.com/user-attachments/assets/1f007b97-fd2e-4903-a6ce-1bf6c6a02983" />
 
 
 
