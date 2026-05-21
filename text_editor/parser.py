@@ -2,7 +2,7 @@ from typing import List, Optional, Tuple
 import re
 
 from scanner import Token, TokenType
-from ast_semantic import AstNode, SemanticAnalyzer, SemanticError, AstFormatter
+from ast_semantic import AstNode, SemanticAnalyzer, SemanticError, AstFormatter, SymbolTable
 
 _REAL_LITERAL_LEX = re.compile(r"^(?:\d+\.\d+(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)$")
 
@@ -214,12 +214,15 @@ class Parser:
         _, syntax_errors = self.parse(tokens)
         return len(syntax_errors) == 0, syntax_errors
 
-    def analyze_full(self, tokens: List[Token]) -> Tuple[AstNode, List[SyntaxError], List[SemanticError]]:
+    def analyze_full(
+        self, tokens: List[Token]
+    ) -> Tuple[AstNode, List[SyntaxError], List[SemanticError], SymbolTable]:
         root, syntax_errors = self.parse(tokens)
         if syntax_errors:
-            return root, syntax_errors, []
-        semantic_errors = SemanticAnalyzer().analyze(root)
-        return root, syntax_errors, semantic_errors
+            return root, syntax_errors, [], SymbolTable()
+        analyzer = SemanticAnalyzer()
+        semantic_errors = analyzer.analyze(root)
+        return root, syntax_errors, semantic_errors, analyzer.symbol_table
 
     def format_ast(self, root: AstNode) -> str:
         return AstFormatter().format(root)

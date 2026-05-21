@@ -15,6 +15,8 @@ from scanner import Scanner, Token, TokenType
 from parser import Parser, SyntaxError
 from expr_scanner import ExprScanner, ExprToken
 from expr_parser import ExprParser, ExprSyntaxError
+from ir_codegen import IrGenerator, format_ir
+from ir_optimize import apply_optimizations, apply_quad_optimizations, format_quads
  
 
 def _course_assets_base_dir() -> str:
@@ -396,6 +398,45 @@ class ExprGrammarErrorTable(QTableWidget):
         self.setItem(row, 2, msg_item)
 
 
+class IrOptimizationPanel(QWidget):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet(
+            "font-weight: 600; padding: 6px 8px; background: #f5f5f5; border-bottom: 1px solid #ddd;"
+        )
+        layout.addWidget(self.status_label)
+
+        self.ir_output = QTextEdit()
+        self.ir_output.setReadOnly(True)
+        self.ir_output.setPlaceholderText(
+            "Трёхадресный код и результаты локальных оптимизаций появятся после анализа (F5)…"
+        )
+        layout.addWidget(self.ir_output)
+
+    def clear(self):
+        self.status_label.clear()
+        self.ir_output.clear()
+
+    def set_status(self, text: str, *, success: bool = True):
+        color = "#1e7e34" if success else "#c62828"
+        self.status_label.setStyleSheet(
+            f"font-weight: 600; padding: 6px 8px; color: {color}; "
+            "background: #f5f5f5; border-bottom: 1px solid #ddd;"
+        )
+        self.status_label.setText(text)
+
+    def set_ir_report(self, sections: list[tuple[str, str]]):
+        self.ir_output.clear()
+        for title, body in sections:
+            self.ir_output.append(f"=== {title} ===\n{body}\n")
+
+
 class TetradsPolizPanel(QWidget):
 
     errorClicked = pyqtSignal(int, int, int, int)
@@ -455,7 +496,7 @@ class TetradsPolizPanel(QWidget):
         for quad in quads:
             self.quad_table.add_quad(quad)
 
-    def set_poliz(self, rpn, value, warning: str = ""):
+    def set_poliz(self, rpn, value, warning: str = "", quad_opt_sections: list[tuple[str, str]] | None = None):
         self.poliz_output.clear()
         self.poliz_output.append("ПОЛИЗ и вычисление (только для целых литералов)\n")
         if warning:
@@ -467,6 +508,10 @@ class TetradsPolizPanel(QWidget):
         else:
             self.poliz_output.append("ПОЛИЗ: —")
             self.poliz_output.append("\nЗначение: —")
+        if quad_opt_sections:
+            self.poliz_output.append("\n--- Локальные оптимизации тетрад ---\n")
+            for title, body in quad_opt_sections:
+                self.poliz_output.append(f"=== {title} ===\n{body}\n")
 
 
 def create_icon(char):
@@ -652,6 +697,10 @@ class TextEditor(QMainWindow):
 
         self.output_tabs.addTab(self.tetrads_poliz_tab, "Тетрады и ПОЛИЗ")
         self.tab_tetrads_poliz = self.output_tabs.count() - 1
+
+        self.ir_optimization_panel = IrOptimizationPanel()
+        self.output_tabs.addTab(self.ir_optimization_panel, "IR и оптимизация")
+        self.tab_ir_opt = self.output_tabs.count() - 1
 
     def create_new_editor_tab(self, file_path=None):
         tab = EditorTab()
@@ -1332,6 +1381,7 @@ class TextEditor(QMainWindow):
         self.output_area.clear()
         self.ast_output.clear()
         self.semantic_table.clear_table()
+        self.ir_optimization_panel.clear()
 
         try:
             tokens, lex_errors = self.scanner.analyze(text)
@@ -1363,7 +1413,7 @@ class TextEditor(QMainWindow):
                 return
 
             self.output_area.append("\n=== СИНТАКСИЧЕСКИЙ АНАЛИЗ ===\n")
-            ast_root, syntax_errors, semantic_errors = self.parser.analyze_full(tokens)
+            ast_root, syntax_errors, semantic_errors, symbol_table = self.parser.analyze_full(tokens)
 
             if syntax_errors:
                 self.output_area.append(f"Найдено синтаксических ошибок: {len(syntax_errors)}\n")
@@ -1420,6 +1470,37 @@ class TextEditor(QMainWindow):
                     "-", 1, 1, "Семантических ошибок не обнаружено.", is_error=False
                 )
 
+            ir_instructions = IrGenerator().generate(ast_root)
+            optimization_steps = apply_optimizations(ir_instructions, symbol_table)
+
+            ir_sections: list[tuple[str, str]] = [
+                ("Входной IR (трёхадресный код)", format_ir(ir_instructions)),
+            ]
+            for step in optimization_steps:
+                ir_sections.append(
+                    (
+                        f"Входной IR для «{step.name}»",
+                        format_ir(step.before),
+                    )
+                )
+                ir_sections.append(
+                    (
+                        f"Выходной IR после «{step.name}»",
+                        f"{step.description}\n\n{format_ir(step.after)}",
+                    )
+                )
+
+            self.ir_optimization_panel.set_ir_report(ir_sections)
+            self.ir_optimization_panel.set_status(
+                "AST построено; TAC сгенерирован; применены 2 локальные оптимизации.",
+                success=len(semantic_errors) == 0,
+            )
+
+            self.output_area.append("\n=== ПРОМЕЖУТОЧНОЕ ПРЕДСТАВЛЕНИЕ (TAC) ===\n")
+            self.output_area.append(format_ir(ir_instructions))
+            for step in optimization_steps:
+                self.output_area.append(f"\n--- {step.name} ---\n{format_ir(step.after)}")
+
             self.output_tabs.setCurrentIndex(self.tab_semantics_ast)
 
             total_errors = len(syntax_errors) + len(semantic_errors)
@@ -1429,6 +1510,7 @@ class TextEditor(QMainWindow):
 
             if total_errors == 0:
                 self.output_area.append("\n✅ Программа синтаксически и семантически верна!")
+                self.output_tabs.setCurrentIndex(self.tab_ir_opt)
 
         except Exception as e:
             import traceback
@@ -1547,16 +1629,29 @@ class TextEditor(QMainWindow):
             self.tetrads_poliz_panel.error_table.show_no_errors()
             self.tetrads_poliz_panel.set_quads(quads)
 
-            self.output_area.append("=== ТЕТРАДЫ ===\n")
+            quad_opt_sections: list[tuple[str, str]] = []
             if quads:
-                for i, quad in enumerate(quads, 1):
-                    self.output_area.append(
-                        f"{i}. ({quad.op}, {quad.arg1}, {quad.arg2}, {quad.result})"
+                quad_steps = apply_quad_optimizations(quads)
+                quad_opt_sections.append(("Входной IR (тетрады)", format_quads(quads)))
+                for step in quad_steps:
+                    quad_opt_sections.append((f"Входной IR для «{step.name}»", format_quads(step.before)))
+                    quad_opt_sections.append(
+                        (
+                            f"Выходной IR после «{step.name}»",
+                            f"{step.description}\n\n{format_quads(step.after)}",
+                        )
                     )
+                self.tetrads_poliz_panel.set_quads(quad_steps[-1].after)
+
+            self.output_area.append("=== ТЕТРАДЫ (входной IR) ===\n")
+            if quads:
+                self.output_area.append(format_quads(quads))
+                for step in quad_steps:
+                    self.output_area.append(f"\n--- {step.name} ---\n{format_quads(step.after)}")
             else:
                 self.output_area.append("(тетрады не сгенерированы)")
 
-            self.tetrads_poliz_panel.set_poliz(rpn, value, warning)
+            self.tetrads_poliz_panel.set_poliz(rpn, value, warning, quad_opt_sections)
             if warning:
                 self.output_area.append(f"\n⚠ {warning}")
             if rpn:
@@ -1745,6 +1840,14 @@ URL: <a href="https://dispace.edu.nstu.ru/didesk/course/show/8594">https://dispa
 
     def show_help(self):
         help_text = """
+        Анализ (Пуск, F5):
+        - Лексический и синтаксический анализ объявлений const
+        - Построение AST и семантическая проверка
+        - Генерация трёхадресного кода (TAC) и две локальные оптимизации (вкладка «IR и оптимизация»)
+        
+        Анализ выражения (F6):
+        - Разбор арифметического выражения, тетрады и ПОЛИЗ
+        
         Команды меню Файл:
         - Создать (Ctrl+N) - создание нового файла
         - Открыть (Ctrl+O) - открытие существующего файла
@@ -1762,8 +1865,9 @@ URL: <a href="https://dispace.edu.nstu.ru/didesk/course/show/8594">https://dispa
         - Выделить все (Ctrl+A) - выделить весь текст
         
         Назначение программы:
-        - Лексический анализ входного текста
-        - Синтаксический анализ входного текста
+        - Лексический и синтаксический анализ (F5) — объявления const
+        - Семантика, AST, TAC и локальные оптимизации (вкладка IR)
+        - Арифметические выражения, тетрады, ПОЛИЗ (F6)
         """
         
         QMessageBox.information(self, "Справка", help_text)
@@ -1776,8 +1880,8 @@ URL: <a href="https://dispace.edu.nstu.ru/didesk/course/show/8594">https://dispa
             "<b>Год:</b> 2026<br>"
             "<b>Вариант курсовой работы:</b> Объявление вещественной константы с "
             "инициализацией на языке Pascal</p>"
-            "<p>Приложение представляет собой текстовый редактор, который в дальнейшем "
-            "будет расширен до полноценного языкового процессора для анализа.</p>"
+            "<p>ЛР5–7: объявления <code>const</code>, AST, семантика, трёхадресный код "
+            "и две локальные оптимизации (F5). Арифметические выражения — тетрады и ПОЛИЗ (F6).</p>"
             "</div>"
         )
         QMessageBox.about(self, "О программе", about_text)
