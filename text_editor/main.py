@@ -8,9 +8,13 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidgetItem, QHeaderView, QTabWidget, QComboBox,
                              QPushButton, QHBoxLayout, QLineEdit, QDialog,
                              QDialogButtonBox, QTextBrowser)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QUrl
-from PyQt6.QtGui import QAction, QKeySequence, QTextCursor, QFont, QIcon, QPixmap, QPainter, QColor, QBrush, QTextCharFormat
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QUrl, QKeyCombination, QEvent
+from PyQt6.QtGui import (
+    QAction, QKeySequence, QTextCursor, QFont, QIcon, QPixmap, QPainter, QColor,
+    QBrush, QTextCharFormat, QDragEnterEvent, QDropEvent, QKeyEvent,
+)
 from editor_widget import CodeEditor
+from i18n import I18n
 from scanner import Scanner, Token, TokenType
 from parser import Parser, SyntaxError
 from expr_scanner import ExprScanner, ExprToken
@@ -99,6 +103,12 @@ class EditorTab(QWidget):
     def select_all(self):
         self.editor.selectAll()
 
+    def set_font_size(self, size: int):
+        self.editor.set_font_size(size)
+
+    def set_editor_placeholder(self, text: str):
+        self.editor.set_placeholder(text)
+
 
 class TokenTable(QTableWidget):
     tokenClicked = pyqtSignal(int, int)
@@ -107,6 +117,9 @@ class TokenTable(QTableWidget):
         super().__init__(parent)
         self.setup_table()
         
+    def set_header_labels(self, labels):
+        self.setHorizontalHeaderLabels(labels)
+
     def setup_table(self):
         self.setColumnCount(4)
         self.setHorizontalHeaderLabels(["Код", "Тип", "Лексема", "Местоположение"])
@@ -170,6 +183,9 @@ class SyntaxErrorTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_table()
+
+    def set_header_labels(self, labels):
+        self.setHorizontalHeaderLabels(labels)
         
     def setup_table(self):
         self.setColumnCount(3)
@@ -223,6 +239,9 @@ class SearchResultTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_table()
+
+    def set_header_labels(self, labels):
+        self.setHorizontalHeaderLabels(labels)
         
     def setup_table(self):
         self.setColumnCount(3)
@@ -271,6 +290,9 @@ class SemanticTable(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_table()
+
+    def set_header_labels(self, labels):
+        self.setHorizontalHeaderLabels(labels)
 
     def setup_table(self):
         self.setColumnCount(3)
@@ -534,10 +556,15 @@ class TextEditor(QMainWindow):
         self.parser = Parser()
         self.expr_scanner = ExprScanner()
         self.expr_parser = ExprParser()
+        self.i18n = I18n("ru")
+        self.font_size = 11
+        self._menus = {}
+        self._actions = {}
+        self.setAcceptDrops(True)
         self.init_ui()
         
     def init_ui(self):
-        self.setWindowTitle("Compiler")
+        self.setWindowTitle(self.i18n.tr("app_title"))
         self.setGeometry(200, 200, 1400, 900)
         
         central_widget = QWidget()
@@ -548,6 +575,7 @@ class TextEditor(QMainWindow):
         
         self.create_menu_bar()
         self.create_toolbar()
+        self.create_search_panel()
         self.create_editor_tabs()
         self.create_output_tabs()
         
@@ -556,16 +584,20 @@ class TextEditor(QMainWindow):
         main_splitter.addWidget(self.output_tabs)
         main_splitter.setSizes([500, 400])
         
+        layout.addWidget(self.search_panel)
         layout.addWidget(main_splitter)
         
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_label = QLabel("Готов к работе")
+        self.status_label = QLabel(self.i18n.tr("status_ready"))
         self.status_bar.addWidget(self.status_label)
-        self.set_status_message("Готов к работе")
+        self.set_status_message(self.i18n.tr("status_ready"))
         
+        self.editor_tabs.currentChanged.connect(self._on_editor_tab_changed)
         self.update_status_from_current_tab()
         self.apply_styles()
+        self.apply_font_size()
+        self.retranslate_ui()
 
     def set_status_message(self, message: str, state: str = "idle"):
         colors = {
@@ -576,6 +608,242 @@ class TextEditor(QMainWindow):
         color = colors.get(state, colors["idle"])
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.status_label.setText(message)
+
+    def _editor_font(self) -> QFont:
+        font = QFont("Courier New", self.font_size)
+        font.setFixedPitch(True)
+        return font
+
+    def _apply_font_to_text_edit(self, widget: QTextEdit, font: QFont):
+        widget.setFont(font)
+        widget.document().setDefaultFont(font)
+        cursor = QTextCursor(widget.document())
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.SelectionType.Document)
+        fmt = QTextCharFormat()
+        fmt.setFont(font)
+        cursor.setCharFormat(fmt)
+        cursor.clearSelection()
+        cursor.endEditBlock()
+
+    def apply_font_size(self):
+        font = self._editor_font()
+        for i in range(self.editor_tabs.count()):
+            tab = self.editor_tabs.widget(i)
+            if tab:
+                tab.set_font_size(self.font_size)
+        for widget in (
+            self.output_area,
+            self.ast_output,
+            self.ir_optimization_panel.ir_output,
+            self.tetrads_poliz_panel.poliz_output,
+        ):
+            self._apply_font_to_text_edit(widget, font)
+
+    def increase_font_size(self):
+        if self.font_size >= 48:
+            return
+        self.font_size += 1
+        self.apply_font_size()
+        self._show_font_size_status()
+
+    def decrease_font_size(self):
+        if self.font_size <= 6:
+            return
+        self.font_size -= 1
+        self.apply_font_size()
+        self._show_font_size_status()
+
+    def reset_font_size(self):
+        self.font_size = 11
+        self.apply_font_size()
+        self._show_font_size_status()
+
+    def _show_font_size_status(self):
+        self.set_status_message(f"{self.i18n.tr('font_size_status')}: {self.font_size} pt")
+
+    def focus_search(self):
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def set_language(self, lang: str):
+        self.i18n.set_language(lang)
+        self.retranslate_ui()
+
+    def retranslate_ui(self):
+        self.setWindowTitle(self.i18n.tr("app_title"))
+        self._menus["file"].setTitle(self.i18n.tr("menu_file"))
+        self._menus["edit"].setTitle(self.i18n.tr("menu_edit"))
+        self._menus["view"].setTitle(self.i18n.tr("menu_view"))
+        self._menus["text"].setTitle(self.i18n.tr("menu_text"))
+        self._menus["run"].setTitle(self.i18n.tr("menu_run"))
+        self._menus["help"].setTitle(self.i18n.tr("menu_help"))
+        self._menus["language"].setTitle(self.i18n.tr("menu_language"))
+
+        action_keys = {
+            "new": "action_new",
+            "open": "action_open",
+            "save": "action_save",
+            "save_as": "action_save_as",
+            "new_tab": "action_new_tab",
+            "close_tab": "action_close_tab",
+            "exit": "action_exit",
+            "undo": "action_undo",
+            "redo": "action_redo",
+            "cut": "action_cut",
+            "copy": "action_copy",
+            "paste": "action_paste",
+            "delete": "action_delete",
+            "select_all": "action_select_all",
+            "find": "action_find",
+            "find_next": "action_find",
+            "font_increase": "action_font_increase",
+            "font_decrease": "action_font_decrease",
+            "font_reset": "action_font_reset",
+            "lang_ru": "lang_ru",
+            "lang_en": "lang_en",
+            "task": "task_action",
+            "grammar": "grammar_action",
+            "classification": "classification_action",
+            "method": "method_action",
+            "example": "example_action",
+            "references": "references_action",
+            "source": "source_action",
+            "coursework": "coursework_action",
+            "run": "action_run",
+            "expr": "action_expr",
+            "help": "action_help",
+            "shortcuts": "action_shortcuts",
+            "about": "action_about",
+            "tb_new": "toolbar_new",
+            "tb_open": "toolbar_open",
+            "tb_save": "toolbar_save",
+            "tb_run": "toolbar_run",
+            "tb_expr": "toolbar_expr",
+            "tb_help": "toolbar_help",
+            "tb_about": "action_about",
+        }
+        for key, tr_key in action_keys.items():
+            if key in self._actions:
+                self._actions[key].setText(self.i18n.tr(tr_key))
+
+        output_tab_keys = [
+            "tab_results",
+            "tab_tokens",
+            "tab_syntax_errors",
+            "tab_search_results",
+            "tab_semantics_ast",
+            "tab_tetrads_poliz",
+            "tab_ir_opt",
+        ]
+        for idx, tr_key in enumerate(output_tab_keys):
+            if idx < self.output_tabs.count():
+                self.output_tabs.setTabText(idx, self.i18n.tr(tr_key))
+
+        self.token_table.set_header_labels([
+            self.i18n.tr("col_code"),
+            self.i18n.tr("col_type"),
+            self.i18n.tr("col_lexeme"),
+            self.i18n.tr("col_location"),
+        ])
+        self.syntax_error_table.set_header_labels([
+            self.i18n.tr("col_fragment"),
+            self.i18n.tr("col_location"),
+            self.i18n.tr("col_error_desc"),
+        ])
+        self.search_result_table.set_header_labels([
+            self.i18n.tr("col_match"),
+            self.i18n.tr("col_location"),
+            self.i18n.tr("col_length"),
+        ])
+        self.semantic_table.set_header_labels([
+            self.i18n.tr("col_fragment"),
+            self.i18n.tr("col_location"),
+            self.i18n.tr("col_sem_desc"),
+        ])
+
+        self.search_find_label.setText(self.i18n.tr("search_find"))
+        self.search_input.setPlaceholderText(self.i18n.tr("search_placeholder"))
+        self.search_regex_label.setText(self.i18n.tr("search_regex_presets"))
+        self.search_type_label.setText(self.i18n.tr("search_type"))
+        self.search_button.setText(self.i18n.tr("search_button"))
+        self._update_search_count_label(0)
+
+        current_type = self.search_type.currentIndex()
+        self.search_type.clear()
+        self.search_type.addItems([
+            self.i18n.tr("search_type_plain"),
+            self.i18n.tr("search_type_regex"),
+            self.i18n.tr("search_type_word"),
+        ])
+        if 0 <= current_type < self.search_type.count():
+            self.search_type.setCurrentIndex(current_type)
+
+        preset_idx = self.regex_presets.currentIndex()
+        self.regex_presets.setItemText(0, self.i18n.tr("search_regex_choose"))
+        if preset_idx >= 0:
+            self.regex_presets.setCurrentIndex(preset_idx)
+
+        self.output_area.setPlaceholderText(self.i18n.tr("output_placeholder"))
+        self.ast_output.setPlaceholderText(self.i18n.tr("ast_placeholder"))
+        self.ir_optimization_panel.ir_output.setPlaceholderText(self.i18n.tr("ir_placeholder"))
+        self.tetrads_poliz_panel.poliz_output.setPlaceholderText(self.i18n.tr("poliz_placeholder"))
+
+        for i in range(self.editor_tabs.count()):
+            tab = self.editor_tabs.widget(i)
+            if tab and not tab.current_file:
+                self.editor_tabs.setTabText(i, self.i18n.tr("tab_new_file"))
+            if tab:
+                tab.set_editor_placeholder(self.i18n.tr("editor_placeholder"))
+
+    def _update_search_count_label(self, count: int):
+        self.search_count_label.setText(self.i18n.tr("search_count", count=count))
+
+    def eventFilter(self, watched, event):
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and isinstance(watched, (CodeEditor, QTextEdit))
+            and self._handle_font_zoom_key(event)
+        ):
+            return True
+        return super().eventFilter(watched, event)
+
+    def _handle_font_zoom_key(self, event: QKeyEvent) -> bool:
+        if event.modifiers() != Qt.KeyboardModifier.ControlModifier:
+            return False
+        key = event.key()
+        if key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+            self.decrease_font_size()
+            return True
+        if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+            self.increase_font_size()
+            return True
+        return False
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if path and os.path.isfile(path):
+                    event.acceptProposedAction()
+                    return
+
+    def dropEvent(self, event: QDropEvent):
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path and os.path.isfile(path):
+                self.create_new_editor_tab(path)
+                self.set_status_message(
+                    self.i18n.tr("drop_opened", name=os.path.basename(path))
+                )
+        event.acceptProposedAction()
+
+    def show_shortcuts(self):
+        QMessageBox.information(
+            self,
+            self.i18n.tr("shortcuts_title"),
+            self.i18n.tr("shortcuts_body"),
+        )
 
     def _format_lex_error_message(self, value: str) -> str:
         if value and len(value) > 1 and all(ch == value[0] for ch in value):
@@ -589,42 +857,42 @@ class TextEditor(QMainWindow):
         search_layout = QHBoxLayout(self.search_panel)
         search_layout.setContentsMargins(10, 5, 10, 5)
         
-        search_layout.addWidget(QLabel("Найти:"))
+        self.search_find_label = QLabel()
+        search_layout.addWidget(self.search_find_label)
         
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Введите текст или регулярное выражение...")
         self.search_input.setMinimumWidth(300)
+        self.search_input.returnPressed.connect(self.run_search)
         search_layout.addWidget(self.search_input)
 
-        search_layout.addWidget(QLabel("Шаблоны RegExp:"))
+        self.search_regex_label = QLabel()
+        search_layout.addWidget(self.search_regex_label)
 
         self.regex_presets = QComboBox()
-        self.regex_presets.setToolTip("Готовые регулярные выражения для проверки/поиска")
-        self.regex_presets.addItem("— выбрать шаблон —", "")
-        self.regex_presets.addItem("Франция: номер телефона (моб./стац.)", r"^(?:\+33|0)[1-9](?:[ .-]?\d{2}){4}$")
-        self.regex_presets.addItem("snake_case переменная (a-z + _)", r"^[a-z]+(?:_[a-z]+)*$")
+        self.regex_presets.setToolTip("RegExp presets")
+        self.regex_presets.addItem("", "")
+        self.regex_presets.addItem("FR phone", r"^(?:\+33|0)[1-9](?:[ .-]?\d{2}){4}$")
+        self.regex_presets.addItem("snake_case", r"^[a-z]+(?:_[a-z]+)*$")
         self.regex_presets.addItem(
-            "Надёжный пароль (≥14, Рус A/a, цифра, спец)",
+            "strong password",
             r"^(?=.*[А-ЯЁ])(?=.*[а-яё])(?=.*\d)(?=.*[()#?!|/@/$%\^&*\-_]).{14,}$",
         )
         self.regex_presets.currentIndexChanged.connect(self.on_regex_preset_changed)
         search_layout.addWidget(self.regex_presets)
         
-        search_layout.addWidget(QLabel("Тип поиска:"))
+        self.search_type_label = QLabel()
+        search_layout.addWidget(self.search_type_label)
         
         self.search_type = QComboBox()
-        self.search_type.addItem("Обычный поиск")
-        self.search_type.addItem("Регулярное выражение")
-        self.search_type.addItem("Целое слово")
         search_layout.addWidget(self.search_type)
         
-        self.search_button = QPushButton("Найти")
+        self.search_button = QPushButton()
         self.search_button.clicked.connect(self.run_search)
         self.search_button.setFixedWidth(80)
         search_layout.addWidget(self.search_button)
         
-        self.search_count_label = QLabel("Найдено: 0")
-        self.search_count_label.setFixedWidth(100)
+        self.search_count_label = QLabel()
+        self.search_count_label.setFixedWidth(120)
         search_layout.addWidget(self.search_count_label)
         
         search_layout.addStretch()
@@ -634,7 +902,7 @@ class TextEditor(QMainWindow):
         if not pattern:
             return
         self.search_input.setText(pattern)
-        self.search_type.setCurrentText("Регулярное выражение")
+        self.search_type.setCurrentIndex(1)
         
     def create_editor_tabs(self):
         self.editor_tabs = QTabWidget()
@@ -702,9 +970,21 @@ class TextEditor(QMainWindow):
         self.output_tabs.addTab(self.ir_optimization_panel, "IR и оптимизация")
         self.tab_ir_opt = self.output_tabs.count() - 1
 
+        for widget in (
+            self.output_area,
+            self.ast_output,
+            self.ir_optimization_panel.ir_output,
+            self.tetrads_poliz_panel.poliz_output,
+        ):
+            widget.installEventFilter(self)
+
     def create_new_editor_tab(self, file_path=None):
         tab = EditorTab()
         tab.textChanged.connect(self.on_text_changed)
+        tab.editor.cursorPositionChanged.connect(self.update_status_from_current_tab)
+        tab.editor.installEventFilter(self)
+        tab.set_font_size(self.font_size)
+        tab.set_editor_placeholder(self.i18n.tr("editor_placeholder"))
         
         if file_path:
             try:
@@ -713,26 +993,39 @@ class TextEditor(QMainWindow):
                 tab.current_file = file_path
                 tab_name = os.path.basename(file_path)
             except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл: {str(e)}")
-                tab_name = "Новый файл"
+                QMessageBox.critical(
+                    self, self.i18n.tr("msg_error"),
+                    self.i18n.tr("msg_open_failed", err=str(e)),
+                )
+                tab_name = self.i18n.tr("tab_new_file")
         else:
-            tab_name = "Новый файл"
+            tab_name = self.i18n.tr("tab_new_file")
         
         index = self.editor_tabs.addTab(tab, tab_name)
         self.editor_tabs.setCurrentIndex(index)
         
         return tab
-        
+
+    def _on_editor_tab_changed(self, _index):
+        self.update_status_from_current_tab()
+
+    def close_current_editor_tab(self):
+        self.close_editor_tab(self.editor_tabs.currentIndex())
+
     def close_editor_tab(self, index):
         if self.editor_tabs.count() <= 1:
-            QMessageBox.information(self, "Информация", "Нельзя закрыть последнюю вкладку")
+            QMessageBox.information(
+                self, self.i18n.tr("msg_info"), self.i18n.tr("msg_cannot_close_last")
+            )
             return
             
         tab = self.editor_tabs.widget(index)
         if tab.has_changes():
             reply = QMessageBox.question(
-                self, "Сохранение", 
-                f"Файл '{self.editor_tabs.tabText(index)}' был изменен. Сохранить изменения?",
+                self, self.i18n.tr("msg_save_title"),
+                self.i18n.tr(
+                    "msg_save_prompt", name=self.editor_tabs.tabText(index)
+                ),
                 QMessageBox.StandardButton.Save | 
                 QMessageBox.StandardButton.Discard | 
                 QMessageBox.StandardButton.Cancel
@@ -787,8 +1080,6 @@ class TextEditor(QMainWindow):
                 background-color: white;
                 color: #2c3e50;
                 border: none;
-                font-family: 'Courier New';
-                font-size: 11pt;
             }
             QTabWidget::pane {
                 border: 1px solid #bdc3c7;
@@ -869,134 +1160,245 @@ class TextEditor(QMainWindow):
             }
         """)
         
+    def _register_action(self, key: str, action: QAction):
+        self._actions[key] = action
+
     def create_menu_bar(self):
         menubar = self.menuBar()
         
-        file_menu = menubar.addMenu("Файл")
+        file_menu = menubar.addMenu("")
+        self._menus["file"] = file_menu
         
-        new_action = QAction("Создать", self)
+        new_action = QAction("", self)
         new_action.setShortcut(QKeySequence.StandardKey.New)
         new_action.triggered.connect(self.new_file)
         file_menu.addAction(new_action)
+        self._register_action("new", new_action)
         
-        open_action = QAction("Открыть", self)
+        open_action = QAction("", self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self.open_file)
         file_menu.addAction(open_action)
+        self._register_action("open", open_action)
         
-        save_action = QAction("Сохранить", self)
+        save_action = QAction("", self)
         save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.triggered.connect(self.save_file)
         file_menu.addAction(save_action)
+        self._register_action("save", save_action)
         
-        save_as_action = QAction("Сохранить как", self)
+        save_as_action = QAction("", self)
         save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_as_action.triggered.connect(self.save_file_as)
         file_menu.addAction(save_as_action)
+        self._register_action("save_as", save_as_action)
+
+        new_tab_action = QAction("", self)
+        new_tab_action.setShortcut(QKeySequence("Ctrl+T"))
+        new_tab_action.triggered.connect(self.new_file)
+        file_menu.addAction(new_tab_action)
+        self._register_action("new_tab", new_tab_action)
+
+        close_tab_action = QAction("", self)
+        close_tab_action.setShortcut(QKeySequence("Ctrl+W"))
+        close_tab_action.triggered.connect(self.close_current_editor_tab)
+        file_menu.addAction(close_tab_action)
+        self._register_action("close_tab", close_tab_action)
         
         file_menu.addSeparator()
         
-        exit_action = QAction("Выход", self)
+        exit_action = QAction("", self)
         exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+        self._register_action("exit", exit_action)
         
-        edit_menu = menubar.addMenu("Правка")
+        edit_menu = menubar.addMenu("")
+        self._menus["edit"] = edit_menu
         
-        undo_action = QAction("Отмена", self)
+        undo_action = QAction("", self)
         undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         undo_action.triggered.connect(self.undo)
         edit_menu.addAction(undo_action)
+        self._register_action("undo", undo_action)
         
-        redo_action = QAction("Повтор", self)
+        redo_action = QAction("", self)
         redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         redo_action.triggered.connect(self.redo)
         edit_menu.addAction(redo_action)
+        self._register_action("redo", redo_action)
         
         edit_menu.addSeparator()
         
-        cut_action = QAction("Вырезать", self)
+        cut_action = QAction("", self)
         cut_action.setShortcut(QKeySequence.StandardKey.Cut)
         cut_action.triggered.connect(self.cut)
         edit_menu.addAction(cut_action)
+        self._register_action("cut", cut_action)
         
-        copy_action = QAction("Копировать", self)
+        copy_action = QAction("", self)
         copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         copy_action.triggered.connect(self.copy)
         edit_menu.addAction(copy_action)
+        self._register_action("copy", copy_action)
         
-        paste_action = QAction("Вставить", self)
+        paste_action = QAction("", self)
         paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         paste_action.triggered.connect(self.paste)
         edit_menu.addAction(paste_action)
+        self._register_action("paste", paste_action)
         
-        delete_action = QAction("Удалить", self)
+        delete_action = QAction("", self)
         delete_action.setShortcut(QKeySequence.StandardKey.Delete)
         delete_action.triggered.connect(self.delete_text)
         edit_menu.addAction(delete_action)
+        self._register_action("delete", delete_action)
         
         edit_menu.addSeparator()
         
-        select_all_action = QAction("Выделить все", self)
+        select_all_action = QAction("", self)
         select_all_action.setShortcut(QKeySequence.StandardKey.SelectAll)
         select_all_action.triggered.connect(self.select_all)
         edit_menu.addAction(select_all_action)
+        self._register_action("select_all", select_all_action)
+
+        find_action = QAction("", self)
+        find_action.setShortcut(QKeySequence.StandardKey.Find)
+        find_action.triggered.connect(self.focus_search)
+        edit_menu.addAction(find_action)
+        self._register_action("find", find_action)
+
+        find_next_action = QAction("", self)
+        find_next_action.setShortcut("F3")
+        find_next_action.triggered.connect(self.run_search)
+        edit_menu.addAction(find_next_action)
+        self._register_action("find_next", find_next_action)
+
+        view_menu = menubar.addMenu("")
+        self._menus["view"] = view_menu
+
+        font_inc_action = QAction("", self)
+        font_inc_action.setShortcuts([
+            QKeySequence.StandardKey.ZoomIn,
+            QKeySequence("Ctrl+="),
+            QKeySequence("Ctrl++"),
+        ])
+        font_inc_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        font_inc_action.triggered.connect(self.increase_font_size)
+        view_menu.addAction(font_inc_action)
+        self._register_action("font_increase", font_inc_action)
+
+        font_dec_action = QAction("", self)
+        font_dec_action.setShortcuts([
+            QKeySequence.StandardKey.ZoomOut,
+            QKeySequence(QKeyCombination(Qt.KeyboardModifier.ControlModifier, Qt.Key.Key_Minus)),
+            QKeySequence(QKeyCombination(
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+                Qt.Key.Key_Minus,
+            )),
+            QKeySequence("Ctrl+-"),
+        ])
+        font_dec_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        font_dec_action.triggered.connect(self.decrease_font_size)
+        view_menu.addAction(font_dec_action)
+        self._register_action("font_decrease", font_dec_action)
+
+        font_reset_action = QAction("", self)
+        font_reset_action.setShortcut(QKeySequence("Ctrl+0"))
+        font_reset_action.triggered.connect(self.reset_font_size)
+        view_menu.addAction(font_reset_action)
+        self._register_action("font_reset", font_reset_action)
+
+        view_menu.addSeparator()
+        lang_menu = view_menu.addMenu("")
+        self._menus["language"] = lang_menu
+
+        lang_ru_action = QAction("", self)
+        lang_ru_action.triggered.connect(lambda: self.set_language("ru"))
+        lang_menu.addAction(lang_ru_action)
+        self._register_action("lang_ru", lang_ru_action)
+
+        lang_en_action = QAction("", self)
+        lang_en_action.triggered.connect(lambda: self.set_language("en"))
+        lang_menu.addAction(lang_en_action)
+        self._register_action("lang_en", lang_en_action)
         
-        text_menu = menubar.addMenu("Текст")
+        text_menu = menubar.addMenu("")
+        self._menus["text"] = text_menu
         
-        task_action = QAction("Постановка задачи", self)
+        task_action = QAction("", self)
         task_action.triggered.connect(partial(self.show_course_material, "task"))
         text_menu.addAction(task_action)
+        self._register_action("task", task_action)
         
-        grammar_action = QAction("Грамматика", self)
+        grammar_action = QAction("", self)
         grammar_action.triggered.connect(partial(self.show_course_material, "grammar"))
         text_menu.addAction(grammar_action)
+        self._register_action("grammar", grammar_action)
         
-        classification_action = QAction("Классификация грамматики", self)
+        classification_action = QAction("", self)
         classification_action.triggered.connect(partial(self.show_course_material, "classification"))
         text_menu.addAction(classification_action)
+        self._register_action("classification", classification_action)
         
-        method_action = QAction("Метод анализа", self)
+        method_action = QAction("", self)
         method_action.triggered.connect(partial(self.show_course_material, "method"))
         text_menu.addAction(method_action)
+        self._register_action("method", method_action)
         
-        example_action = QAction("Тестовый пример", self)
+        example_action = QAction("", self)
         example_action.triggered.connect(partial(self.show_course_material, "example"))
         text_menu.addAction(example_action)
+        self._register_action("example", example_action)
         
-        references_action = QAction("Список литературы", self)
+        references_action = QAction("", self)
         references_action.triggered.connect(partial(self.show_course_material, "references"))
         text_menu.addAction(references_action)
+        self._register_action("references", references_action)
         
-        source_action = QAction("Исходный код программы", self)
+        source_action = QAction("", self)
         source_action.triggered.connect(partial(self.show_course_material, "source"))
         text_menu.addAction(source_action)
+        self._register_action("source", source_action)
         
-        coursework_action = QAction("Курсовая работа", self)
+        coursework_action = QAction("", self)
         coursework_action.triggered.connect(partial(self.show_course_material, "coursework"))
         text_menu.addAction(coursework_action)
+        self._register_action("coursework", coursework_action)
         
-        run_menu = menubar.addMenu("Пуск")
-        run_action = QAction("Запустить анализатор", self)
+        run_menu = menubar.addMenu("")
+        self._menus["run"] = run_menu
+
+        run_action = QAction("", self)
         run_action.setShortcut("F5")
         run_action.triggered.connect(self.run_analyzer)
         run_menu.addAction(run_action)
+        self._register_action("run", run_action)
 
-        expr_action = QAction("Анализ арифметического выражения", self)
+        expr_action = QAction("", self)
         expr_action.setShortcut("F6")
         expr_action.triggered.connect(self.run_expr_analyzer)
         run_menu.addAction(expr_action)
+        self._register_action("expr", expr_action)
 
-        help_menu = menubar.addMenu("Справка")
+        help_menu = menubar.addMenu("")
+        self._menus["help"] = help_menu
         
-        help_action = QAction("Вызов справки", self)
+        help_action = QAction("", self)
         help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
         help_action.triggered.connect(self.show_help)
         help_menu.addAction(help_action)
+        self._register_action("help", help_action)
+
+        shortcuts_action = QAction("", self)
+        shortcuts_action.triggered.connect(self.show_shortcuts)
+        help_menu.addAction(shortcuts_action)
+        self._register_action("shortcuts", shortcuts_action)
         
-        about_action = QAction("О программе", self)
+        about_action = QAction("", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
+        self._register_action("about", about_action)
         
     def create_toolbar(self):
         toolbar = QToolBar("Панель инструментов")
@@ -1005,134 +1407,129 @@ class TextEditor(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.addToolBar(toolbar)
         
-        new_action = QAction("Новый", self)
+        new_action = QAction("", self)
         new_icon = QIcon.fromTheme("document-new")
         if new_icon.isNull():
             new_icon = create_icon("📄")
         new_action.setIcon(new_icon)
-        new_action.setToolTip("Создать новый файл (Ctrl+N)")
         new_action.triggered.connect(self.new_file)
         toolbar.addAction(new_action)
+        self._register_action("tb_new", new_action)
         
-        open_action = QAction("Открыть", self)
+        open_action = QAction("", self)
         open_icon = QIcon.fromTheme("document-open")
         if open_icon.isNull():
             open_icon = create_icon("📂")
         open_action.setIcon(open_icon)
-        open_action.setToolTip("Открыть существующий файл (Ctrl+O)")
         open_action.triggered.connect(self.open_file)
         toolbar.addAction(open_action)
+        self._register_action("tb_open", open_action)
         
-        save_action = QAction("Сохранить", self)
+        save_action = QAction("", self)
         save_icon = QIcon.fromTheme("document-save")
         if save_icon.isNull():
             save_icon = create_icon("💾")
         save_action.setIcon(save_icon)
-        save_action.setToolTip("Сохранить текущий файл (Ctrl+S)")
         save_action.triggered.connect(self.save_file)
         toolbar.addAction(save_action)
+        self._register_action("tb_save", save_action)
         
         toolbar.addSeparator()
         
-        undo_action = QAction("Отмена", self)
+        undo_action = QAction("", self)
         undo_icon = QIcon.fromTheme("edit-undo")
         if undo_icon.isNull():
             undo_icon = create_icon("↩")
         undo_action.setIcon(undo_icon)
-        undo_action.setToolTip("Отменить последнее действие (Ctrl+Z)")
         undo_action.triggered.connect(self.undo)
         toolbar.addAction(undo_action)
         
-        redo_action = QAction("Повтор", self)
+        redo_action = QAction("", self)
         redo_icon = QIcon.fromTheme("edit-redo")
         if redo_icon.isNull():
             redo_icon = create_icon("↪")
         redo_action.setIcon(redo_icon)
-        redo_action.setToolTip("Повторить отмененное действие (Ctrl+Y)")
         redo_action.triggered.connect(self.redo)
         toolbar.addAction(redo_action)
         
         toolbar.addSeparator()
         
-        copy_action = QAction("Копировать", self)
+        copy_action = QAction("", self)
         copy_icon = QIcon.fromTheme("edit-copy")
         if copy_icon.isNull():
             copy_icon = create_icon("📋")
         copy_action.setIcon(copy_icon)
-        copy_action.setToolTip("Копировать выделенный текст (Ctrl+C)")
         copy_action.triggered.connect(self.copy)
         toolbar.addAction(copy_action)
         
-        cut_action = QAction("Вырезать", self)
+        cut_action = QAction("", self)
         cut_icon = QIcon.fromTheme("edit-cut")
         if cut_icon.isNull():
             cut_icon = create_icon("✂")
         cut_action.setIcon(cut_icon)
-        cut_action.setToolTip("Вырезать выделенный текст (Ctrl+X)")
         cut_action.triggered.connect(self.cut)
         toolbar.addAction(cut_action)
         
-        paste_action = QAction("Вставить", self)
+        paste_action = QAction("", self)
         paste_icon = QIcon.fromTheme("edit-paste")
         if paste_icon.isNull():
             paste_icon = create_icon("📌")
         paste_action.setIcon(paste_icon)
-        paste_action.setToolTip("Вставить текст из буфера обмена (Ctrl+V)")
         paste_action.triggered.connect(self.paste)
         toolbar.addAction(paste_action)
         
         toolbar.addSeparator()
         
-        run_action = QAction("Пуск", self)
+        run_action = QAction("", self)
         run_icon = QIcon.fromTheme("media-playback-start")
         if run_icon.isNull():
             run_icon = create_icon("▶")
         run_action.setIcon(run_icon)
-        run_action.setToolTip("Запустить анализатор (F5)")
         run_action.triggered.connect(self.run_analyzer)
         toolbar.addAction(run_action)
+        self._register_action("tb_run", run_action)
 
-        expr_action = QAction("Выражение", self)
+        expr_action = QAction("", self)
         expr_icon = QIcon.fromTheme("system-run")
         if expr_icon.isNull():
             expr_icon = create_icon("fx")
         expr_action.setIcon(expr_icon)
-        expr_action.setToolTip("Анализ арифметического выражения (F6)")
         expr_action.triggered.connect(self.run_expr_analyzer)
         toolbar.addAction(expr_action)
+        self._register_action("tb_expr", expr_action)
 
         toolbar.addSeparator()
 
-        help_action = QAction("Справка", self)
+        help_action = QAction("", self)
         help_icon = QIcon.fromTheme("help-contents")
         if help_icon.isNull():
             help_icon = create_icon("?")
         help_action.setIcon(help_icon)
-        help_action.setToolTip("Вызов справки (F1)")
         help_action.triggered.connect(self.show_help)
         toolbar.addAction(help_action)
+        self._register_action("tb_help", help_action)
         
-        about_action = QAction("О программе", self)
+        about_action = QAction("", self)
         about_icon = QIcon.fromTheme("help-about")
         if about_icon.isNull():
             about_icon = create_icon("i")
         about_action.setIcon(about_icon)
-        about_action.setToolTip("Информация о программе")
         about_action.triggered.connect(self.show_about)
         toolbar.addAction(about_action)
+        self._register_action("tb_about", about_action)
     
     def new_file(self):
         self.create_new_editor_tab()
-        self.set_status_message("Создан новый файл")
+        self.set_status_message(self.i18n.tr("status_new_file"))
         
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Открыть файл", "", 
-            "Текстовые файлы (*.txt);;Все файлы (*.*)"
+            self, self.i18n.tr("dialog_open"), "",
+            self.i18n.tr("filter_text"),
         )
         if file_path:
             self.create_new_editor_tab(file_path)
-            self.set_status_message(f"Открыт файл: {file_path}")
+            self.set_status_message(self.i18n.tr("status_opened", path=file_path))
                     
     def save_file(self):
         tab = self.get_current_editor_tab()
@@ -1144,10 +1541,15 @@ class TextEditor(QMainWindow):
                 with open(tab.current_file, 'w', encoding='utf-8') as file:
                     file.write(tab.get_text())
                 tab.text_changed = False
-                self.set_status_message(f"Файл сохранен: {os.path.basename(tab.current_file)}")
+                self.set_status_message(
+                    self.i18n.tr("status_saved", name=os.path.basename(tab.current_file))
+                )
                 return True
             except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл: {str(e)}")
+                QMessageBox.critical(
+                    self, self.i18n.tr("msg_error"),
+                    self.i18n.tr("msg_save_failed", err=str(e)),
+                )
                 return False
         else:
             return self.save_file_as()
@@ -1158,8 +1560,8 @@ class TextEditor(QMainWindow):
             return False
             
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить файл как", "", 
-            "Текстовые файлы (*.txt);;Все файлы (*.*)"
+            self, self.i18n.tr("dialog_save_as"), "",
+            self.i18n.tr("filter_text"),
         )
         if file_path:
             tab.current_file = file_path
@@ -1173,11 +1575,13 @@ class TextEditor(QMainWindow):
             if tab.has_changes():
                 self.editor_tabs.setCurrentIndex(i)
                 reply = QMessageBox.question(
-                    self, "Сохранение", 
-                    f"Файл '{self.editor_tabs.tabText(i)}' был изменен. Сохранить изменения?",
-                    QMessageBox.StandardButton.Save | 
-                    QMessageBox.StandardButton.Discard | 
-                    QMessageBox.StandardButton.Cancel
+                    self, self.i18n.tr("msg_save_title"),
+                    self.i18n.tr(
+                        "msg_save_prompt", name=self.editor_tabs.tabText(i)
+                    ),
+                    QMessageBox.StandardButton.Save |
+                    QMessageBox.StandardButton.Discard |
+                    QMessageBox.StandardButton.Cancel,
                 )
                 
                 if reply == QMessageBox.StandardButton.Save:
@@ -1202,7 +1606,11 @@ class TextEditor(QMainWindow):
             line = tab.get_current_line()
             col = tab.get_current_column()
             chars = len(tab.get_text())
-            self.set_status_message(f"Строка: {line}, Колонка: {col} | Символов: {chars}")
+            self.set_status_message(
+                self.i18n.tr(
+                    "status_line_col_chars", line=line, col=col, chars=chars
+                )
+            )
         
     def undo(self):
         tab = self.get_current_editor_tab()
@@ -1265,22 +1673,26 @@ class TextEditor(QMainWindow):
         search_pattern = self.search_input.text()
         
         if not text.strip():
-            QMessageBox.information(self, "Информация", "Нет данных для поиска. Введите текст в редактор.")
+            QMessageBox.information(
+                self, self.i18n.tr("msg_info"), self.i18n.tr("search_no_editor")
+            )
             return
         
         self.search_result_table.clear_table()
         tab.clear_highlighting()
         
-        search_type = self.search_type.currentText()
+        search_type = self.search_type.currentIndex()
         
         results = []
         
         lines = text.split('\n')
         
         try:
-            if search_type == "Обычный поиск":
+            if search_type == 0:
                 if not search_pattern:
-                    QMessageBox.information(self, "Информация", "Введите текст для поиска")
+                    QMessageBox.information(
+                        self, self.i18n.tr("msg_info"), self.i18n.tr("search_no_pattern")
+                    )
                     return
                 for line_num, line in enumerate(lines, start=1):
                     pos = 0
@@ -1292,9 +1704,11 @@ class TextEditor(QMainWindow):
                         results.append((line_num, start + 1, end, search_pattern))
                         pos = end
             
-            elif search_type == "Регулярное выражение":
+            elif search_type == 1:
                 if not search_pattern:
-                    QMessageBox.information(self, "Информация", "Введите регулярное выражение")
+                    QMessageBox.information(
+                        self, self.i18n.tr("msg_info"), self.i18n.tr("search_no_regex")
+                    )
                     return
                 regex = re.compile(search_pattern)
                 for line_num, line in enumerate(lines, start=1):
@@ -1303,9 +1717,11 @@ class TextEditor(QMainWindow):
                         end = match.end()
                         results.append((line_num, start + 1, end, match.group()))
             
-            elif search_type == "Целое слово":
+            elif search_type == 2:
                 if not search_pattern:
-                    QMessageBox.information(self, "Информация", "Введите текст для поиска")
+                    QMessageBox.information(
+                        self, self.i18n.tr("msg_info"), self.i18n.tr("search_no_pattern")
+                    )
                     return
                 word_pattern = r'\b' + re.escape(search_pattern) + r'\b'
                 regex = re.compile(word_pattern)
@@ -1319,18 +1735,30 @@ class TextEditor(QMainWindow):
                 self.search_result_table.add_result(match_text, line_num, start_pos, end_pos, len(match_text))
             
             count = len(results)
-            self.search_count_label.setText(f"Найдено: {count}")
+            self._update_search_count_label(count)
             
             if count == 0 and search_pattern:
-                QMessageBox.information(self, "Результаты поиска", f"Совпадений не найдено для: {search_pattern}")
+                QMessageBox.information(
+                    self,
+                    self.i18n.tr("search_results_title"),
+                    self.i18n.tr("search_no_matches", pattern=search_pattern),
+                )
             elif count > 0:
                 self.output_tabs.setCurrentIndex(3)
-                self.status_label.setText(f"Поиск завершен. Найдено совпадений: {count}")
+                self.set_status_message(
+                    self.i18n.tr("search_done", count=count)
+                )
                 
         except re.error as e:
-            QMessageBox.critical(self, "Ошибка", f"Неверное регулярное выражение: {str(e)}")
+            QMessageBox.critical(
+                self, self.i18n.tr("msg_error"),
+                self.i18n.tr("search_regex_error", err=str(e)),
+            )
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при поиске: {str(e)}")
+            QMessageBox.critical(
+                self, self.i18n.tr("msg_error"),
+                self.i18n.tr("search_error", err=str(e)),
+            )
     
     def _filter_lex_errors_for_display(
         self, text: str, lex_errors, syntax_errors, absorbed_real_positions=frozenset()
@@ -1372,7 +1800,9 @@ class TextEditor(QMainWindow):
 
         text = tab.get_text()
         if not text.strip():
-            QMessageBox.information(self, "Информация", "Введите текст для анализа")
+            QMessageBox.information(
+                self, self.i18n.tr("msg_info"), self.i18n.tr("msg_enter_text")
+            )
             return
 
         tab.clear_highlighting()
@@ -1525,7 +1955,9 @@ class TextEditor(QMainWindow):
 
         text = tab.get_text().strip()
         if not text:
-            QMessageBox.information(self, "Информация", "Введите арифметическое выражение для анализа")
+            QMessageBox.information(
+                self, self.i18n.tr("msg_info"), self.i18n.tr("msg_enter_expr")
+            )
             return
 
         tab.clear_highlighting()
